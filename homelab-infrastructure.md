@@ -445,7 +445,7 @@ Vaultwarden бэкапится **в отдельный restic-репозитор
 └── vaultwarden/        # репо для Vaultwarden (этот LXC)
 ```
 
-SSH-доступ к backup-серверу для Vaultwarden идёт под отдельным юзером `backup-vaultwarden` (не под `romank`, как DockerHost через Backrest). Юзер настроен через `Match User` в `/etc/ssh/sshd_config`:
+SSH-доступ к backup-серверу для Vaultwarden идёт под отдельным юзером `backup-vaultwarden`. Юзер настроен через `Match User` в `/etc/ssh/sshd_config`:
 
 - `ChrootDirectory /home/backup-vaultwarden` — chroot в свою home-директорию, видна только она.
 - `ForceCommand internal-sftp` — встроенный SFTP-subsystem, никакого shell.
@@ -488,7 +488,6 @@ systemctl status vaultwarden
 - **Traefik LXC (192.168.1.15)** — единственный разрешённый источник запросов к 8000 (через nftables). Без Traefik сервис недоступен снаружи LXC.
 - **AdGuard Home (192.168.1.2)** — DNS, в том числе для split-horizon `vaultwarden.kvasok.xyz` → 192.168.1.15.
 - **Backup-сервер (192.168.1.11)** — для restic-бэкапов и PBS-снапшотов.
-- **Authelia в DockerHost** — если Vaultwarden прикрыт forwardAuth-middleware Authelia в Traefik (опционально).
 
 Vaultwarden не использует общий PostgreSQL DockerHost (в отличие от исходной конфигурации), поэтому при остановке DockerHost Vaultwarden продолжает работать.
 
