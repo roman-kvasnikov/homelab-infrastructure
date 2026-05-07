@@ -62,6 +62,7 @@ description: |
 | 192.168.1.10   | Proxmox host          | Гипервизор                                                 |
 | 192.168.1.11   | Backup server         | Хранилище для restic, поднимается через WoL                |
 | 192.168.1.15   | Traefik LXC           | Reverse proxy, CrowdSec, WireGuard клиент к VPS            |
+| 192.168.1.17   | Vaultwarden LXC       | Vaultwarden Password Manager with Restic Backup            |
 | 192.168.1.20   | DockerHost VM         | Все основные self-hosted сервисы в Docker, Samba           |
 | 192.168.1.40   | Work VM               | Рабочая VM, доступ по SSH                                  |
 | 192.168.1.101  | Huawei notebook       | Ноутбук на NixOS (host `huawei`)                           |
