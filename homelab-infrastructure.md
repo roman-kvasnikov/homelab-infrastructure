@@ -468,8 +468,9 @@ sdb + sdc (2 × 2.7 TB) — mdadm RAID0 (md0), ext4, mountpoint /mnt/data
 ### 10.4. Уровень 3: Данные внутри DockerHost через restic
 
 **Что бэкапится:**
-- `/mnt/data/` — все volumes сервисов в Docker
 - `/home/romank/docker/` — compose-файлы с ENV (дополнительная страховка к PBS-бэкапу системного диска)
+- `/etc/samba/` — конфигурация SAMBA
+- `/mnt/data/` — все volumes сервисов в Docker
 
 **Чем:** Backrest (GUI для restic) на DockerHost VM.
 
