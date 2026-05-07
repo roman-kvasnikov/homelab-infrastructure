@@ -349,6 +349,149 @@ Engine крутится на Traefik LXC рядом с Traefik. Bouncer инте
 - LAPI слушает только `127.0.0.1:8080`.
 - Если CrowdSec engine упадёт, bouncer продолжит работу с последним списком, но новые баны добавляться не будут. Поведение при недоступности LAPI настраивается параметром `defaultDecision` плагина.
 
+## Vaultwarden LXC (192.168.1.17)
+
+Self-hosted password manager, вынесен из DockerHost VM в отдельный LXC для изоляции от соседних сервисов. Работает нативно (без Docker) на бинарнике, извлечённом из официального Docker-образа `vaultwarden/server`. База данных — SQLite (вместо общего PostgreSQL, как было в DockerHost).
+
+Версия Vaultwarden зафиксирована, обновление вручную через replace бинарника + перезапуск systemd-сервиса (см. ниже).
+
+### Файловая структура
+
+```
+/usr/local/bin/vaultwarden            # бинарь, извлечён из официального Docker-образа
+/usr/share/vaultwarden/web-vault/     # статика веб-интерфейса
+/etc/vaultwarden/.env                 # конфигурация (env-переменные)
+/etc/systemd/system/vaultwarden.service
+/var/lib/vaultwarden/                 # домашняя директория системного юзера vaultwarden
+├── data/                             # данные (БД, attachments, ключи)
+│   ├── db.sqlite3                    # основная БД (SQLite в WAL-режиме)
+│   ├── attachments/                  # вложения к записям
+│   ├── rsa_key.pem                   # приватный ключ для подписи JWT
+│   └── icon_cache/                   # кэш иконок сайтов (в бэкап не попадает)
+├── .ssh/                             # SSH-ключ для restic-бэкапов
+│   ├── id_backup
+│   └── id_backup.pub
+└── .restic-password                  # пароль restic-репозитория (chmod 600)
+```
+
+Бинарь и web-vault извлекаются из официального Docker-образа через `skopeo` + `umoci` — это даёт ровно те же файлы, что использует Docker, но без Docker-обёртки. Альтернатива (компиляция из исходников через cargo) требует много памяти и времени и здесь не используется. Для совместимости с динамической линковкой бинарника установлены `libmariadb3` и `libpq5`, хотя из СУБД используется только SQLite — Vaultwarden слинкован сразу со всеми тремя driver-библиотеками.
+
+### Systemd
+
+Сервис `vaultwarden.service` запускает бинарник от системного юзера `vaultwarden` (UID 999). Включён sandbox-набор: `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `PrivateDevices`, `ProtectKernel*`, `RestrictNamespaces`, `LockPersonality`. Запись разрешена только в `/var/lib/vaultwarden` через `ReadWritePaths`. Перезапуск при падении — `Restart=always` с задержкой 10 секунд.
+
+Сервис автозапускается при старте контейнера (`enabled`).
+
+### Конфигурация (`/etc/vaultwarden/.env`)
+
+Ключевые параметры:
+
+- `DATA_FOLDER=/var/lib/vaultwarden/data` — куда писать БД и attachments.
+- `DATABASE_URL=/var/lib/vaultwarden/data/db.sqlite3` — путь к SQLite-файлу. Postgres не используется.
+- `WEB_VAULT_FOLDER=/usr/share/vaultwarden/web-vault` — статика.
+- `ROCKET_ADDRESS=192.168.1.17`, `ROCKET_PORT=8000` — слушает только на конкретном LAN-IP, не на `0.0.0.0`. Loopback и другие интерфейсы недоступны.
+- `DOMAIN=https://vaultwarden.kvasok.xyz` — публичный URL, важен для CORS, WebAuthn (RPID), email-ссылок и push-нотификаций.
+- `SIGNUPS_ALLOWED=false`, `INVITATIONS_ALLOWED=false` — регистрация и приглашения новых пользователей закрыты. Включаются временно только для разовых нужд (миграции, добавления пользователей).
+- `IP_HEADER=X-Forwarded-For` — Vaultwarden читает реальный IP клиента из этого заголовка от Traefik. Безопасно благодаря nftables-фильтру (см. ниже): X-Forwarded-For может прислать только Traefik с 192.168.1.15.
+- `ENABLE_WEBSOCKET=true` — для real-time sync между клиентами.
+- `ADMIN_TOKEN` не задан — админка `/admin` отключена. Управление через прямой доступ к `.env` и БД, без UI.
+- `LOG_LEVEL=warn`, `EXTENDED_LOGGING=true` — логи через journald (`journalctl -u vaultwarden`).
+
+### Сетевая фильтрация (nftables)
+
+Vaultwarden принимает входящие соединения на `192.168.1.17:8000` **только** с адреса Traefik (192.168.1.15). Все остальные источники в LAN и из VPN получают `drop` на пакетах — соединение не устанавливается, отдаётся timeout. Это закрывает прямой доступ к Vaultwarden из LAN/VPN, минуя Traefik с его middleware-цепочкой (CrowdSec, rate-limit, security headers).
+
+Конфиг в `/etc/nftables.conf`:
+
+```
+table inet filter {
+    chain input {
+        type filter hook input priority filter; policy accept;
+        tcp dport 8000 ip saddr 192.168.1.15 accept
+        tcp dport 8000 drop
+    }
+    chain forward { type filter hook forward priority filter; policy accept; }
+    chain output  { type filter hook output  priority filter; policy accept; }
+}
+```
+
+Глобальные политики оставлены `accept` — фильтр точечный, ограничивает только порт 8000. SSH (22), ICMP, исходящий трафик и established connections не затронуты. Конфиг загружается через `nftables.service` при старте контейнера.
+
+### Резервное копирование
+
+Vaultwarden бэкапится **двумя независимыми механизмами**:
+
+**1. PBS-снапшот всего LXC** — ежедневно в 05:00 в составе общего pve-задания. Закрывает сценарий «снёс LXC целиком, нужно восстановить за минуту». Снапшоты лежат на backup-сервере в `/mnt/data/pbs/datastore/ct/117/`.
+
+**2. Restic-снапшот данных** — ежедневно в 01:00 UTC через скрипт `/usr/local/sbin/vaultwarden-backup.sh`, запускаемый systemd-таймером `vaultwarden-backup.timer`. Закрывает сценарий «нужна конкретная версия БД от N дней назад» и даёт гранулярное восстановление.
+
+Скрипт делает три шага:
+
+1. Online-снапшот SQLite через `sqlite3 .backup` — это атомарная копия БД, безопасная для работающего Vaultwarden (не блокирует и не повреждает живой файл).
+2. `restic backup` всей `/var/lib/vaultwarden/data/`, исключая живой `db.sqlite3`, WAL-файлы (`-shm`, `-wal`), `icon_cache/` и `tmp/`. В бэкап попадают: `db.sqlite3.backup` (consistent copy), `attachments/`, `rsa_key.pem`. Тег `vaultwarden`, host `vaultwarden`.
+3. `restic forget --group-by host,tags` с retention 7 daily / 4 weekly / 6 monthly + `--prune`. Группировка по host+tags — чтобы все снимки попадали в одну группу retention, независимо от изменения путей в скрипте.
+
+**Восстановление БД**: после `restic restore` файл лежит как `db.sqlite3.backup` — нужно переименовать в `db.sqlite3` перед запуском Vaultwarden. WAL-файлы (`-shm`, `-wal`) при восстановлении не нужны и автоматически создадутся при первом старте.
+
+### Restic-репозиторий и SSH-доступ к backup-серверу
+
+Vaultwarden бэкапится **в отдельный restic-репозиторий**, не в общий с DockerHost. Это даёт изоляцию: компрометация Vaultwarden LXC не позволяет атакующему добраться до бэкапов DockerHost, и наоборот.
+
+Структура на backup-сервере (192.168.1.11):
+
+```
+/mnt/data/restic/
+├── dockerhost/         # репо для DockerHost (Backrest)
+└── vaultwarden/        # репо для Vaultwarden (этот LXC)
+```
+
+SSH-доступ к backup-серверу для Vaultwarden идёт под отдельным юзером `backup-vaultwarden` (не под `romank`, как DockerHost через Backrest). Юзер настроен через `Match User` в `/etc/ssh/sshd_config`:
+
+- `ChrootDirectory /home/backup-vaultwarden` — chroot в свою home-директорию, видна только она.
+- `ForceCommand internal-sftp` — встроенный SFTP-subsystem, никакого shell.
+- `AllowTcpForwarding no`, `X11Forwarding no`, `PermitTunnel no` — лишние возможности SSH отключены.
+- Shell `/usr/sbin/nologin` — интерактивный логин невозможен.
+
+Каталог `/mnt/data/restic/vaultwarden/` физически живёт на RAID0-массиве, но доступен внутри chroot через bind mount в `/home/backup-vaultwarden/restic/` (запись в `/etc/fstab`).
+
+Аутентификация SSH — по ключу ed25519 (`/var/lib/vaultwarden/.ssh/id_backup`), публичная часть в `~backup-vaultwarden/.ssh/authorized_keys`. Пароль restic-репозитория сгенерирован как diceware-passphrase (~100 бит энтропии), хранится в `/var/lib/vaultwarden/.restic-password` (chmod 600, owner `vaultwarden`). Записан также в офлайн-хранилище для disaster recovery.
+
+### Обновление Vaultwarden
+
+Образ обновляется заменой бинаря и web-vault, без перекомпиляции. Skopeo и umoci оставлены установленными для повторного использования.
+
+Процедура (на примере выхода версии X.Y.Z):
+
+```bash
+cd /tmp
+skopeo copy docker://docker.io/vaultwarden/server:X.Y.Z oci:vaultwarden-image:X.Y.Z
+umoci unpack --rootless --image vaultwarden-image:X.Y.Z vaultwarden-new
+
+systemctl stop vaultwarden
+
+# backup of current version (rollback if needed)
+cp /usr/local/bin/vaultwarden /usr/local/bin/vaultwarden.bak
+cp -r /usr/share/vaultwarden/web-vault /usr/share/vaultwarden/web-vault.bak
+
+install -o root -g root -m 755 /tmp/vaultwarden-new/rootfs/vaultwarden /usr/local/bin/vaultwarden
+rm -rf /usr/share/vaultwarden/web-vault
+cp -r /tmp/vaultwarden-new/rootfs/web-vault /usr/share/vaultwarden/
+
+systemctl start vaultwarden
+systemctl status vaultwarden
+```
+
+После нескольких дней успешной работы — удалить `.bak` и временные директории в `/tmp/`.
+
+### Зависимости от внешних сервисов
+
+- **Traefik LXC (192.168.1.15)** — единственный разрешённый источник запросов к 8000 (через nftables). Без Traefik сервис недоступен снаружи LXC.
+- **AdGuard Home (192.168.1.2)** — DNS, в том числе для split-horizon `vaultwarden.kvasok.xyz` → 192.168.1.15.
+- **Backup-сервер (192.168.1.11)** — для restic-бэкапов и PBS-снапшотов.
+- **Authelia в DockerHost** — если Vaultwarden прикрыт forwardAuth-middleware Authelia в Traefik (опционально).
+
+Vaultwarden не использует общий PostgreSQL DockerHost (в отличие от исходной конфигурации), поэтому при остановке DockerHost Vaultwarden продолжает работать.
+
 ## 8. DockerHost VM (192.168.1.20)
 
 Ubuntu VM, основной хост для всех Docker-сервисов. ZFS делается на уровне VM (disk passthrough из Proxmox), чтобы корректно работали hardlinks для *-arr / qBittorrent / Jellyfin.
