@@ -50,7 +50,7 @@ description: |
 
 ## 2. Сетевая топология
 
-Роутер — Keenetic Giga (192.168.1.1). Основная LAN — 192.168.1.0/24 (SSID `Izolda-Rally`), для камер выделен отдельный сегмент 192.168.30.0/24. Между сегментами по умолчанию работает isolate-private, межсегментный трафик открыт только явными permit-правилами на firewall. VPN-подсеть для AmneziaWG-клиентов — **`10.8.0.0/24`**.
+Роутер — Keenetic Giga (`192.168.1.1`). Основная LAN — `192.168.1.0/24` (SSID `Izolda-Rally`), для камер выделен отдельный сегмент `192.168.30.0/24`. Между сегментами по умолчанию работает isolate-private, межсегментный трафик открыт только явными permit-правилами на firewall. VPN-подсеть для AmneziaWG-клиентов — **`10.8.0.0/24`**.
 
 ### 2.1. Основной сегмент LAN (192.168.1.0/24)
 
@@ -60,7 +60,7 @@ description: |
 | 192.168.1.2    | AdGuard Home (LXC)    | Основной DNS, split-horizon                                |
 | 192.168.1.3    | Xray-Proxy (LXC)      | HTTP/SOCKS прокси и DNS-over-Xray для гео-обхода           |
 | 192.168.1.10   | Proxmox host          | Гипервизор                                                 |
-| 192.168.1.11   | Backup server         | Хранилище для restic, поднимается через WoL                |
+| 192.168.1.11   | Backup server         | Proxmox Backup Server + Restic snapshots                   |
 | 192.168.1.15   | Traefik LXC           | Reverse proxy, CrowdSec, WireGuard клиент к VPS            |
 | 192.168.1.17   | Vaultwarden LXC       | Vaultwarden Password Manager with Restic Backup            |
 | 192.168.1.18   | Authelia LXC          | IdP, forward-auth, OIDC, SQLite + Redis                    |
