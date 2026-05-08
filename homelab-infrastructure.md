@@ -494,7 +494,7 @@ systemctl status vaultwarden
 
 Vaultwarden не использует общий PostgreSQL DockerHost (в отличие от исходной конфигурации), поэтому при остановке DockerHost Vaultwarden продолжает работать.
 
-## Authelia LXC (192.168.1.18)
+## 9. Authelia LXC (192.168.1.18)
 
 Self-hosted IdP (Identity Provider) и forward-auth прокси для Traefik. Вынесен из DockerHost VM в отдельный LXC по тем же причинам что и Vaultwarden — изоляция критичного сервиса. Authelia хранит хеши паролей пользователей, TOTP-секреты, WebAuthn credentials, OIDC client secrets и signing keys, поэтому компрометация Authelia = компрометация всех аутентификаций ко всем сервисам инфраструктуры. Уровень изоляции LXC сильно жёстче чем у Docker-контейнеров на общем хосте.
 
