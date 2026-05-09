@@ -225,6 +225,8 @@ nvme0n1 (1 TB NVMe):
 
 Reverse proxy для всех сервисов. Дополнительно держит служебный WireGuard-клиент `wg0` к VPS (`10.0.0.2`).
 
+LXC unprivileged (`unprivileged: 1`) — root внутри маппится в nobody на хосте через user namespaces. Из features включён только `nesting=1` — это нужно не для Docker (его в LXC нет), а для корректной работы systemd 257 в Debian Trixie: современный systemd активно использует user namespaces для собственного sandbox'а юнитов (`PrivateUsers=`, `PrivateTmp=` и т.п.), без `nesting=1` падают journald, tmpfiles-setup и часть служебных юнитов. Эскалации до хоста `nesting=1` в unprivileged-контейнере не даёт. Опасных features (`keyctl`, `mount=`, `mknod`) нет, hostpath-mounts отсутствуют.
+
 ### 6.1. Домены и сертификаты
 
 - **kvasok.xyz** — основной домен homelab. Wildcard `*.kvasok.xyz` резолвится на VPS `77.232.136.6`. На нём публикуются self-hosted сервисы.
@@ -354,6 +356,8 @@ VPN-клиенты получают **полный доступ к LAN на лю
 
 Обратное направление (LAN-хосты инициируют соединения к VPN-клиентам) запрещено default policy DROP. Conntrack-правило `established,related accept` пропускает только ответные пакеты на уже установленные соединения.
 
+Дополнительно в forward chain настроены anti-spoofing-правила: пакеты, пришедшие на `wg0` с source-IP вне `10.8.0.0/24` и `10.0.0.1`, дропаются (никто кроме VPN-клиентов и VPS-соседа не может легитимно появиться на этом интерфейсе); зеркально дропаются пакеты с `eth0`, у которых source-IP из `10.8.0.0/24` или `10.0.0.1` (в LAN таких адресов взяться неоткуда). Правила стоят после conntrack-блока, чтобы не ломать обратные пакеты по уже установленным соединениям. Это сохраняет смысл различия «трафик из LAN» vs «трафик из VPN» на уровне ядра — скомпрометированный VPN-клиент не сможет выдать свои пакеты за идущие из LAN, и наоборот.
+
 #### Динамический MASQUERADE через wg0 hooks
 
 VPN-клиенты приходят с source-IP из `10.8.0.0/24`. У LAN-хостов нет маршрута до этой подсети, поэтому при форварде в LAN адреса нужно подменять на адрес Traefik LXC (192.168.1.15) — это делает MASQUERADE.
@@ -436,6 +440,12 @@ table inet filter {
         ct state established,related accept
         ct state invalid drop
 
+        # Anti-spoofing: пакет на wg0 может иметь source только из VPN или от VPS
+        iifname "wg0" ip saddr != { $VPN_NET, $VPS_WG } drop
+
+        # Anti-spoofing: пакет с eth0 не может выдавать себя за VPN-клиента или VPS
+        iifname "eth0" ip saddr { $VPN_NET, $VPS_WG } drop
+
         # VPN-клиенты → LAN: полный доступ без ограничений по портам
         iifname "wg0" oifname "eth0" ip saddr $VPN_NET accept
     }
@@ -460,6 +470,23 @@ table ip nat {
 #### Резервное копирование
 
 Конфиги `/etc/nftables.conf` и `/etc/wireguard/wg0.conf` бэкапятся в составе общего PBS-снапшота Traefik LXC (см. раздел 12.3). Отдельный restic-бэкап для них не делается — конфиги маленькие, статичные и легко восстанавливаются вместе с LXC из PBS.
+
+### 6.8. SSH-доступ
+
+SSH на Traefik LXC доступен только из LAN (`192.168.1.0/24`) и из VPN (`10.8.0.0/24`) — это ограничено правилом в input chain nftables. Снаружи (через VPS) SSH не выставлен.
+
+Конфигурация sshd ужесточена через drop-in `/etc/ssh/sshd_config.d/10-hardening.conf`:
+
+- `PermitRootLogin prohibit-password` — root логин только по ключу, не по паролю.
+- `PasswordAuthentication no` — парольная аутентификация полностью отключена.
+- `KbdInteractiveAuthentication no` — закрыт обходной путь через keyboard-interactive.
+- `X11Forwarding no` — на headless LXC не нужен.
+- `AllowAgentForwarding no` — закрыт типичный путь lateral movement через ssh-agent.
+- `AllowTcpForwarding no` — LXC нельзя использовать как туннельный прокси через `ssh -L`.
+
+Drop-in положен отдельным файлом, основной `/etc/ssh/sshd_config` не тронут — изменения переживут апгрейды openssh-server.
+
+Аутентификация — по ed25519-ключам. Защита от brute-force обеспечивается коллекцией CrowdSec `crowdsecurity/sshd` (см. раздел 7).
 
 ## 7. CrowdSec
 
