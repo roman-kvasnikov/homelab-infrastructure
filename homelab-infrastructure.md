@@ -266,7 +266,7 @@ LXC unprivileged (`unprivileged: 1`) — root внутри маппится в n
 | `security-headers-frame-block`| frameDeny, X-Frame-Options=SAMEORIGIN                                       |
 | `block-all`                   | ipAllowList только `127.0.0.1/32` — фактически блок всего                   |
 | `local`                       | ipAllowList: `192.168.1.0/24` (LAN) и `10.8.0.0/24` (VPN)                   |
-| `crowdsec`                    | плагин CrowdSec (LAPI `127.0.0.1:8080`, mode `live`)                        |
+| `crowdsec`                    | плагин CrowdSec (LAPI `127.0.0.1:8080`, mode `stream`, update раз в 60 сек, при недоступности LAPI продолжает работать с кэшем) |
 | `rate-limit`                  | average 50, burst 20, period 1s                                             |
 | `rate-limit-strict`           | average 10, burst 5, period 1s                                              |
 | `buffering`                   | отключение буферизации (все лимиты в 0) — для стримов и больших аплоадов    |
