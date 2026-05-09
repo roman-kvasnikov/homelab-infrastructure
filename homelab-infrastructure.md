@@ -145,7 +145,7 @@ stream {
 - **`wg0`** — служебный туннель между VPS (`10.0.0.1`) и Traefik LXC (`10.0.0.2`). По нему идёт весь публичный HTTPS-трафик и трафик VPN-клиентов.
 - **`awg0`** — AmneziaWG-сервер для пиров (UDP/51821). Обфусцированный протокол для обхода DPI.
 
-На VPS через nftables настроен **forwarding из `awg0` в `wg0`** — пакеты от пиров уходят дальше в служебный туннель к Traefik LXC. На Traefik LXC сделан **MASQUERADE**, поэтому для устройств в LAN трафик VPN-клиентов выглядит как идущий с `192.168.1.15`.
+На VPS через nftables настроен **forwarding из `awg0` в `wg0`** — пакеты от пиров уходят дальше в служебный туннель к Traefik LXC. На Traefik LXC через nftables (таблица `ip nat`, chain `wg-nat`) сделан **MASQUERADE** — правило добавляется динамически через PostUp при подъёме wg0. Для устройств в LAN трафик VPN-клиентов выглядит как идущий с `192.168.1.15`. Подробности — в подразделе 6.7.
 
 ## 4. VPN-доступ к дому (AmneziaWG)
 
@@ -156,9 +156,9 @@ stream {
 ```
 [Пир]  ── AWG / UDP 51821 ──>  [VPS]
                                   │
-                                  │  forward awg0 → wg0
+                                  │  nftables: forward awg0 → wg0
                                   ▼
-                              [Traefik LXC]  ── MASQUERADE ──>  [LAN]
+                              [Traefik LXC]  ── nftables MASQUERADE ──>  [LAN]
 ```
 
 ### 4.2. Split-horizon DNS
