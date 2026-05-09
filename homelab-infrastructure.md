@@ -322,6 +322,145 @@ external-chain-no-rate-limit:
 - `clientTrustedIPs`: `192.168.1.0/24`, `10.8.0.0/24` — запросы от этих источников не банятся (LAN и VPN-клиенты).
 - `forwardedHeadersTrustedIPs`: `10.0.0.1/32` — Traefik доверяет `X-Forwarded-*` заголовкам только от VPS (наш wg0-сосед).
 
+### 6.7. Файрвол (nftables)
+
+Traefik LXC — единственная точка входа в LAN для всего внешнего трафика (публичный HTTPS через VPS и трафик VPN-клиентов AmneziaWG), поэтому к фильтрации применяется максимально консервативный whitelist-подход. Файрвол реализован на **nftables**, по аналогии с другими LXC в инфраструктуре. Раньше использовался ufw, но он давал слишком много неявных дефолтов (FORWARD policy ACCEPT, служебные правила для NetBIOS/SSDP/mDNS, дублирование IPv4/IPv6 цепочек) и плохо стыковался с динамическим MASQUERADE из wg0 PostUp.
+
+#### Структура
+
+В ядре активны две таблицы:
+
+- `inet filter` — двухстековая (IPv4 + IPv6) таблица для фильтрации, содержит цепочки `input`, `forward`, `output`. Default policy: `input` — **drop**, `forward` — **drop**, `output` — accept.
+- `ip nat` — IPv4-only таблица для MASQUERADE трафика VPN-клиентов в LAN. Содержит цепочку `postrouting` (хук `postrouting srcnat`) и именованную цепочку `wg-nat`, в которую `postrouting` делает `jump`. Сама `wg-nat` пустая в момент загрузки конфига — правило MASQUERADE добавляется в неё динамически через PostUp при подъёме wg0 (см. ниже).
+
+#### Что разрешено в input
+
+| Источник                          | Порт/тип        | Назначение                                                    |
+|-----------------------------------|-----------------|---------------------------------------------------------------|
+| loopback (`lo`)                   | любой           | внутреннее взаимодействие (CrowdSec LAPI, postfix и т.п.)     |
+| любой                             | conntrack established/related | стандартное правило для ответных пакетов                     |
+| любой                             | ICMPv4 (4 типа) | destination-unreachable, time-exceeded, parameter-problem, echo-request |
+| любой                             | ICMPv6 (10 типов) | то что разрешал ufw + NDP-типы (необходимы для IPv6)        |
+| `eth0`                            | UDP 67→68       | DHCP-клиент (eth0 получает IP по DHCP от Keenetic)            |
+| LAN (192.168.1.0/24) + VPN (10.8.0.0/24) | TCP 22   | SSH из LAN и через VPN-туннель                                |
+| LAN (192.168.1.0/24) на `eth0`    | TCP 443         | HTTPS из LAN (через split-horizon DNS возвращающий 192.168.1.15) |
+| VPS (10.0.0.1) + VPN (10.8.0.0/24) на `wg0` | TCP 443 | HTTPS через wg0: публичный трафик от VPS с PROXY-protocol и внутренние запросы VPN-клиентов |
+
+Всё остальное молча отбрасывается default policy.
+
+#### Что разрешено в forward
+
+VPN-клиенты получают **полный доступ к LAN на любые порты любых хостов**: `iifname "wg0" oifname "eth0" ip saddr 10.8.0.0/24 accept`. Это сознательное решение — основная цель AmneziaWG-туннеля состоит в том, чтобы из любой точки мира иметь доступ к домашней сети как будто физически дома, без ограничений по сервисам и портам. Безопасность здесь обеспечивается на уровне самого VPN (только авторизованные пиры подключаются) и на уровне отдельных сервисов внутри LAN (Authelia, локальные firewall'ы у Vaultwarden и Authelia, и т.д.).
+
+Обратное направление (LAN-хосты инициируют соединения к VPN-клиентам) запрещено default policy DROP. Conntrack-правило `established,related accept` пропускает только ответные пакеты на уже установленные соединения.
+
+#### Динамический MASQUERADE через wg0 hooks
+
+VPN-клиенты приходят с source-IP из `10.8.0.0/24`. У LAN-хостов нет маршрута до этой подсети, поэтому при форварде в LAN адреса нужно подменять на адрес Traefik LXC (192.168.1.15) — это делает MASQUERADE.
+
+Правило MASQUERADE добавляется не статически в `/etc/nftables.conf`, а динамически в момент подъёма wg0 — через `PostUp` хук в `/etc/wireguard/wg0.conf`:
+
+```ini
+PostUp = nft add rule ip nat wg-nat ip saddr 10.8.0.0/24 oifname eth0 masquerade
+PostDown = nft flush chain ip nat wg-nat
+```
+
+Это позволяет хранить правило в одном логическом месте с конфигом туннеля и автоматически очищать его при опускании wg0. `nft flush chain` идемпотентен: если wg0 упадёт некорректно и потом поднимется, `flush + add` не оставят дубликатов в `wg-nat`.
+
+Ключевая зависимость в порядке загрузки: при старте LXC сначала `nftables.service` загружает `/etc/nftables.conf` (создаёт пустую chain `wg-nat`), затем `wg-quick@wg0.service` поднимает туннель и через PostUp вставляет правило в уже существующую chain. Если перезагрузить только nftables без переподнятия wg0 — правило MASQUERADE потеряется (chain очистится при `flush ruleset`). В этом случае нужно либо `systemctl restart wg-quick@wg0`, либо вручную выполнить команду из PostUp.
+
+#### Полный конфиг `/etc/nftables.conf`
+
+```nft
+#!/usr/sbin/nft -f
+
+flush ruleset
+
+# Сетевые алиасы
+define LAN_NET = 192.168.1.0/24
+define VPN_NET = 10.8.0.0/24
+define VPS_WG  = 10.0.0.1
+
+table inet filter {
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        # Loopback
+        iifname "lo" accept
+
+        # Conntrack
+        ct state established,related accept
+        ct state invalid drop
+
+        # ICMPv4 — что разрешает текущий ufw
+        ip protocol icmp icmp type {
+            destination-unreachable,
+            time-exceeded,
+            parameter-problem,
+            echo-request
+        } accept
+
+        # ICMPv6 — необходимо для NDP и PMTUD на IPv6
+        ip6 nexthdr icmpv6 icmpv6 type {
+            destination-unreachable,
+            packet-too-big,
+            time-exceeded,
+            parameter-problem,
+            echo-request,
+            echo-reply,
+            nd-router-advert,
+            nd-router-solicit,
+            nd-neighbor-advert,
+            nd-neighbor-solicit
+        } accept
+
+        # DHCP-клиент: eth0 получает IP по DHCP от Keenetic
+        iifname "eth0" udp sport 67 udp dport 68 accept
+
+        # SSH из LAN и VPN
+        tcp dport 22 ip saddr { $LAN_NET, $VPN_NET } accept
+
+        # HTTPS из LAN (split-horizon DNS возвращает 192.168.1.15)
+        iifname "eth0" tcp dport 443 ip saddr $LAN_NET accept
+
+        # HTTPS через wg0:
+        #   - от VPS (10.0.0.1) — публичный трафик с PROXY-protocol
+        #   - от VPN-клиентов (10.8.0.0/24) — внутренние запросы к сервисам
+        iifname "wg0" tcp dport 443 ip saddr { $VPS_WG, $VPN_NET } accept
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+
+        # Conntrack
+        ct state established,related accept
+        ct state invalid drop
+
+        # VPN-клиенты → LAN: полный доступ без ограничений по портам
+        iifname "wg0" oifname "eth0" ip saddr $VPN_NET accept
+    }
+
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
+}
+
+table ip nat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        jump wg-nat
+    }
+
+    # MASQUERADE правила добавляются динамически из wg0 PostUp
+    chain wg-nat {
+    }
+}
+```
+
+#### Резервное копирование
+
+Конфиги `/etc/nftables.conf` и `/etc/wireguard/wg0.conf` бэкапятся в составе общего PBS-снапшота Traefik LXC (см. раздел 12.3). Отдельный restic-бэкап для них не делается — конфиги маленькие, статичные и легко восстанавливаются вместе с LXC из PBS.
+
 ## 7. CrowdSec
 
 CrowdSec engine крутится на Traefik LXC рядом с Traefik. Bouncer интегрирован как плагин Traefik (Yaegi).
