@@ -946,7 +946,7 @@ sdb + sdc (2 × 2.7 TB) — mdadm RAID0 (md0), ext4, mountpoint /mnt/data
 
 **Чем:** Proxmox Backup Server, datastore `Homelab` (`/mnt/data/pbs/datastore`).
 
-**Откуда:** инициирует pve, через storage `pbs-homelab` (подключён через API-токен `pve-backup@pbs!pve-main` с ролью `DatastoreAdmin`).
+**Откуда:** инициирует pve, через storage `pbs-homelab` (подключён через API-токен `pve-backup@pbs!pve-main` с ролью `DatastoreBackup`).
 
 **Расписание:** ежедневно, mode `snapshot`, compression `ZSTD`, selection `All` (все VM/LXC автоматически).
 
