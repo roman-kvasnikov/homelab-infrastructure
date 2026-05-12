@@ -922,6 +922,32 @@ sdb + sdc (2 × 2.7 TB) — mdadm RAID0 (md0), ext4, mountpoint /mnt/data
     └── dockerhost/       # restic-репо для бэкапов с DockerHost VM
 ```
 
+#### 12.1.1. Identity model PBS
+
+Доступ к PBS со стороны pve и других интеграций реализован через разделение identity по назначению. На PBS есть два user-account, каждый со своими токенами и узко-определёнными правами. Это даёт два свойства: компрометация одного канала не затрагивает прав другого, и легко добавить новые интеграции — достаточно создать новый токен под уже существующим user.
+
+Текущее состояние ACL:
+
+| ugid                       | path                  | propagate | roleid            |
+|----------------------------|-----------------------|-----------|-------------------|
+| `monitoring@pbs`           | `/`                   | 1         | `Audit`           |
+| `monitoring@pbs!homepage`  | `/`                   | 1         | `Audit`           |
+| `pve-backup@pbs`           | `/datastore/Homelab`  | 1         | `DatastoreBackup` |
+| `pve-backup@pbs!pve-host`  | `/datastore/Homelab`  | 1         | `DatastoreBackup` |
+| `pve-backup@pbs!pve-main`  | `/datastore/Homelab`  | 1         | `DatastoreBackup` |
+
+User-account `pve-backup@pbs` отвечает только за запись бэкапов. Под ним два токена: `pve-main` для бэкапов VM/LXC через pve storage (см. раздел 12.3), и `pve-host` для host backup конфигов pve (см. раздел 12.2). User-account `monitoring@pbs` отвечает только за read-only доступ для интеграций мониторинга. Под ним сейчас один токен — `homepage`, для виджета PBS в homepage dashboard. По мере добавления новых интеграций (Grafana, Uptime Kuma и т.п.) под этим же user создаются дополнительные токены вида `monitoring@pbs!<integration>` с той же ролью `Audit`.
+
+**Архитектурно важная особенность PBS — privilege separation.** У всех токенов включён флаг `privsep=1` (дефолт). Это означает что эффективные права токена равны пересечению прав user и прав токена. User — это верхняя граница прав, токен может только сужать. Если у user нет прав на путь, никакой токен под ним не получит больше. Поэтому user-level ACL в таблице выше обязательны, а не избыточны: без них токены оказываются с пустыми эффективными правами и операции возвращают `permission check failed`. Это сознательное security-решение PBS, чтобы токен случайно не получил больше прав чем user.
+
+**Свойство append-only обеспечивается тем, что роль `DatastoreBackup` не включает права `Datastore.Modify` и `Datastore.Prune`.** Атакующий, получивший токен `pve-main` через компрометацию pve, может только создавать новые снапшоты. Удаление существующих, изменение, prune — PBS возвращает 403 на уровне API. Это касается и человека-админа: чтобы удалить снапшот через сетевой токен, нужно повысить роль на самом PBS (что является осознанным локальным действием, а не результатом компрометации сетевого клиента).
+
+Retention выполняется только локально на PBS через Prune Jobs от имени root@pam — это не сетевой путь, недоступен ни одному клиентскому токену. Garbage Collection и Verify Jobs работают так же — локально на PBS.
+
+#### 12.1.2. SSH hardening на PBS
+
+Конфигурация sshd ужесточена через drop-in `/etc/ssh/sshd_config.d/10-hardening.conf` по той же модели что на Traefik LXC (см. раздел 6.8):
+
 ### 12.2. Уровень 1: Конфигурация pve-хоста через PBS host backup
 
 **Что бэкапится:** критичные конфиги самого Proxmox-хоста — `/etc/pve` (конфиги всех VM/LXC, storage, пользователи), `/etc/network` (бридж, IP), `/etc/cron.d`, `/etc/nut` (UPS), `/root`, плюс `/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf`.
@@ -947,6 +973,7 @@ sdb + sdc (2 × 2.7 TB) — mdadm RAID0 (md0), ext4, mountpoint /mnt/data
 **Чем:** Proxmox Backup Server, datastore `Homelab` (`/mnt/data/pbs/datastore`).
 
 **Откуда:** инициирует pve, через storage `pbs-homelab` (подключён через API-токен `pve-backup@pbs!pve-main` с ролью `DatastoreBackup`).
+**Откуда:** инициирует pve, через storage `pbs-homelab` (подключён через API-токен `pve-backup@pbs!pve-main` с ролью `DatastoreBackup`). Роль `DatastoreBackup` обеспечивает append-only-свойство: `pve` может писать новые снапшоты в PBS, но физически не может удалять или изменять существующие через тот же токен. Компрометация `pve` не даёт возможности уничтожить бэкапы. Подробнее про identity model PBS см. раздел 12.1.1.
 
 **Расписание:** ежедневно, mode `snapshot`, compression `ZSTD`, selection `All` (все VM/LXC автоматически).
 
