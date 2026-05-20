@@ -962,16 +962,17 @@ Drop-in положен отдельным файлом, основной `/etc/s
 
 #### 12.1.4. Локальный restic для retention
 
-Поскольку rest-server отвечает 403 на любые DELETE-операции, retention (`restic forget --prune`) делается локально на бэкап-сервере под root, прямым доступом к каталогам репо в `/mnt/data/restic/<service>/`. Это обходит rest-server полностью — restic работает с файлами на диске напрямую как с локальным репо.
+**Запуск под юзером `rest-server`.** Systemd-юнит retention работает от того же юзера, под которым работает сам rest-server. Это критично для корректности: когда `restic prune` перепаковывает packs и пересоздаёт index, новые файлы наследуют owner процесса. Если бы retention запускался под root, новые index/pack файлы оказались бы под `root:root` с режимом 600 — rest-server (как другой юзер) их прочитать бы не смог, и следующий backup-клиент получал бы `500 Internal Server Error` при попытке открыть репо. Единый owner на всём содержимом `/mnt/data/restic/` исключает этот класс проблем.
 
 **Файловая структура:**
 
 ```
-/etc/restic-retention/              # encryption-пароли для retention (chmod 700)
-├── vaultwarden.password
+/etc/restic-retention/              # owner root:rest-server, mode 750
+├── vaultwarden.password            # mode 640 (group readable)
 ├── authelia.password
 └── dockerhost.password
-/usr/local/sbin/restic-retention.sh # единый скрипт retention для всех репо
+/usr/local/sbin/restic-retention.sh # owner root:rest-server, mode 750
+/var/cache/restic-retention/        # owner rest-server:rest-server, mode 700
 /etc/systemd/system/restic-retention.service
 /etc/systemd/system/restic-retention.timer
 ```
@@ -983,6 +984,21 @@ Drop-in положен отдельным файлом, основной `/etc/s
 - `--keep-monthly 6`
 - `--group-by host,tags`
 - `--prune` (физически удаляет осиротевшие chunks, перепаковывает packs)
+
+**Systemd-юнит `restic-retention.service`:**
+
+```ini
+[Unit]
+Description=Restic retention (forget + prune) for local repos
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/restic-retention.sh
+User=rest-server
+Group=rest-server
+Environment=RESTIC_CACHE_DIR=/var/cache/restic-retention
+```
 
 **Расписание.** Systemd-timer запускает retention ежедневно в 03:00 MSK с `RandomizedDelaySec=30min`. Это после backup-таймеров клиентов (которые срабатывают в 01:00), чтобы не пересекаться по локам репо. `Persistent=true` — если PBS был выключен в момент срабатывания, скрипт запустится при следующем старте.
 
