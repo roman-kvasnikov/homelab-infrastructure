@@ -386,6 +386,7 @@ flush ruleset
 
 # Сетевые алиасы
 define LAN_NET = 192.168.1.0/24
+define IOT_NET = 192.168.10.0/24
 define VPN_NET = 10.8.0.0/24
 define VPS_WG  = 10.0.0.1
 
@@ -429,7 +430,7 @@ table inet filter {
         tcp dport 22 ip saddr { $LAN_NET, $VPN_NET } accept
 
         # HTTPS из LAN (split-horizon DNS возвращает 192.168.1.15)
-        iifname "eth0" tcp dport 443 ip saddr $LAN_NET accept
+        iifname "eth0" tcp dport 443 ip saddr { $LAN_NET, $IOT_NET } accept
 
         # HTTPS через wg0:
         #   - от VPS (10.0.0.1) — публичный трафик с PROXY-protocol
