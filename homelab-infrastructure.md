@@ -1,6 +1,7 @@
 ---
 name: Homelab-Infrastructure
-description: | Полное описание домашней инфраструктуры — Proxmox-based Homelab с внешним VPS как entry point, AmneziaWG для клиентского доступа, WireGuard служебный туннель, Traefik + CrowdSec в LXC, DockerHost VM с self-hosted сервисами. Используй этот контекст для любых вопросов по архитектуре, диагностике или изменениям инфраструктуры.
+description: |
+Полное описание домашней инфраструктуры — Proxmox-based Homelab с внешним VPS как entry point, AmneziaWG для клиентского доступа, WireGuard служебный туннель, Traefik + CrowdSec в LXC, DockerHost VM с self-hosted сервисами. Используй этот контекст для любых вопросов по архитектуре, диагностике или изменениям инфраструктуры.
 ---
 
 # Домашняя инфраструктура Романа
