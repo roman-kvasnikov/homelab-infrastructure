@@ -4,7 +4,7 @@ description: |
   Полное описание домашней инфраструктуры — Proxmox-based Homelab с внешним VPS как entry point, AmneziaWG для клиентского доступа, WireGuard служебный туннель, Traefik + CrowdSec в LXC, DockerHost VM с self-hosted сервисами. Используй этот контекст для любых вопросов по архитектуре, диагностике или изменениям инфраструктуры.
 ---
 
-# Домашняя инфраструктура Романа
+# Домашняя инфраструктура
 
 Этот документ описывает текущее состояние homelab. Используется как контекст для ИИ при обсуждении любых вопросов по сети, сервисам, безопасности и архитектуре.
 
@@ -156,6 +156,7 @@ stream {
     log_format proxy '$remote_addr [$time_local] '
                      '$protocol $status $bytes_sent $bytes_received '
                      '$session_time -> $upstream_addr';
+
     access_log /var/log/nginx/stream.log proxy;
 
     server {
