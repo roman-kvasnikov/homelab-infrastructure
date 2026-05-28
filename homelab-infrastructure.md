@@ -614,18 +614,66 @@ Vaultwarden принимает входящие соединения на `192.1
 Конфиг в `/etc/nftables.conf`:
 
 ```
+#!/usr/sbin/nft -f
+flush ruleset
+
+define TRUSTED_NET = 192.168.1.0/24
+define VPN_NET = 10.8.0.0/24
+define TRAEFIK_IP = 192.168.1.15
+
 table inet filter {
     chain input {
-        type filter hook input priority filter; policy accept;
-        tcp dport 8000 ip saddr 192.168.1.15 accept
-        tcp dport 8000 drop
+        type filter hook input priority filter; policy drop;
+
+        # Loopback
+        iifname "lo" accept
+
+        # Conntrack
+        ct state established,related accept
+        ct state invalid drop
+
+        # ICMPv4 - for ping and path MTU discovery
+        ip protocol icmp icmp type {
+            destination-unreachable,
+            time-exceeded,
+            parameter-problem,
+            echo-request
+        } accept
+
+        # ICMPv6 - for NDP
+        ip6 nexthdr icmpv6 icmpv6 type {
+            destination-unreachable,
+            packet-too-big,
+            time-exceeded,
+            parameter-problem,
+            echo-request,
+            echo-reply,
+            nd-router-advert,
+            nd-router-solicit,
+            nd-neighbor-advert,
+            nd-neighbor-solicit
+        } accept
+
+        # SSH from TRUSTED_NET and VPN_NET
+        tcp dport 22 ip saddr { $TRUSTED_NET, $VPN_NET } accept
+
+        # Vaultwarden only from Traefik
+        tcp dport 8000 ip saddr $TRAEFIK_IP accept
+
+        # Everything else falls into policy drop
     }
-    chain forward { type filter hook forward priority filter; policy accept; }
-    chain output  { type filter hook output  priority filter; policy accept; }
+
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+    }
+
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
 }
 ```
 
-Глобальные политики оставлены `accept` — фильтр точечный, ограничивает только порт 8000. SSH (22), ICMP, исходящий трафик и established connections не затронуты. Конфиг загружается через `nftables.service` при старте контейнера.
+Подход — whitelist с `policy drop` на `input` и `forward`, по аналогии с Traefik LXC: всё, что не разрешено явно, молча отбрасывается. Разрешены loopback, ответные пакеты (conntrack established/related), базовые ICMPv4/ICMPv6 (для ping и NDP), SSH (22) только из `TRUSTED_NET` и `VPN_NET`, и порт Vaultwarden (8000) только с адреса Traefik (192.168.1.15). Прямой доступ к 8000 из LAN/VPN мимо Traefik закрыт — соединение не устанавливается. SSH тоже не открыт отовсюду: только из доверенной сети и через VPN. Исходящий трафик не ограничен (`output` policy accept). Конфиг загружается через `nftables.service` при старте контейнера.
 
 ### 8.5 Резервное копирование
 
@@ -782,18 +830,66 @@ Authelia принимает входящие соединения на `192.168.
 Конфиг в `/etc/nftables.conf`:
 
 ```
+#!/usr/sbin/nft -f
+flush ruleset
+
+define TRUSTED_NET = 192.168.1.0/24
+define VPN_NET = 10.8.0.0/24
+define TRAEFIK_IP = 192.168.1.15
+
 table inet filter {
     chain input {
-        type filter hook input priority filter; policy accept;
-        tcp dport 9091 ip saddr 192.168.1.15 accept
-        tcp dport 9091 drop
+        type filter hook input priority filter; policy drop;
+
+        # Loopback
+        iifname "lo" accept
+
+        # Conntrack
+        ct state established,related accept
+        ct state invalid drop
+
+        # ICMPv4 - for ping and path MTU discovery
+        ip protocol icmp icmp type {
+            destination-unreachable,
+            time-exceeded,
+            parameter-problem,
+            echo-request
+        } accept
+
+        # ICMPv6 - for NDP
+        ip6 nexthdr icmpv6 icmpv6 type {
+            destination-unreachable,
+            packet-too-big,
+            time-exceeded,
+            parameter-problem,
+            echo-request,
+            echo-reply,
+            nd-router-advert,
+            nd-router-solicit,
+            nd-neighbor-advert,
+            nd-neighbor-solicit
+        } accept
+
+        # SSH from TRUSTED_NET and VPN_NET
+        tcp dport 22 ip saddr { $TRUSTED_NET, $VPN_NET } accept
+
+        # Authelia only from Traefik
+        tcp dport 9091 ip saddr $TRAEFIK_IP accept
+
+        # Everything else falls into policy drop
     }
-    chain forward { type filter hook forward priority filter; policy accept; }
-    chain output  { type filter hook output  priority filter; policy accept; }
+
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+    }
+
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
 }
 ```
 
-Глобальные политики `accept` — фильтр точечный, ограничивает только порт 9091. SSH (22), ICMP, Redis (доступен только на loopback по своему bind) не затронуты.
+Подход — whitelist с `policy drop` на `input` и `forward`, по аналогии с Traefik LXC: всё, что не разрешено явно, молча отбрасывается. Разрешены loopback, ответные пакеты (conntrack established/related), базовые ICMPv4/ICMPv6 (для ping и NDP), SSH (22) только из `TRUSTED_NET` и `VPN_NET`, и порт Authelia (9091) только с адреса Traefik (192.168.1.15). Redis отдельным правилом не открывается — он слушает только loopback по своему bind, что покрывается правилом `iifname "lo" accept`. Прямой доступ к 9091 из LAN/VPN мимо Traefik закрыт. SSH не открыт отовсюду: только из доверенной сети и через VPN. Исходящий трафик не ограничен (`output` policy accept). Конфиг загружается через `nftables.service` при старте контейнера.
 
 ### 9.7 Резервное копирование
 
