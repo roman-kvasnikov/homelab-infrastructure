@@ -274,6 +274,7 @@ LXC unprivileged (`unprivileged: 1`) — root внутри маппится в n
 - Динамические провайдеры: `/etc/traefik/dynamic/*.yaml` (по файлу на сервис + общий `config.yaml` со всеми middleware и TLS-опциями).
 - Access logs используется для парсера CrowdSec.
 - Entrypoint `websecure` (443) принимает PROXY protocol от VPS (`proxyProtocol.trustedIPs: ["10.0.0.1"]`).
+- Метрики Prometheus отдаются на отдельном entrypoint `metrics` (`192.168.1.15:8081`) — секция `metrics.prometheus.entryPoint: metrics` в `traefik.yaml`. Это даёт RPS, коды ответов, латентность и трафик по сервисам; скрейпится стеком мониторинга (см. §14.3).
 
 ### 6.3. TLS-опции
 
@@ -431,10 +432,11 @@ PostDown = nft flush chain ip nat wg-nat
 
 flush ruleset
 
-# Сетевые алиасы
-define LAN_NET = 192.168.1.0/24
+define TRUSTED_NET = 192.168.1.0/24
 define VPN_NET = 10.8.0.0/24
 define VPS_WG  = 10.0.0.1
+define MONITORING_IP = 192.168.1.19
+define DOCKERHOST_IP = 192.168.1.20
 
 table inet filter {
     chain input {
@@ -447,7 +449,7 @@ table inet filter {
         ct state established,related accept
         ct state invalid drop
 
-        # ICMPv4 — что разрешает текущий ufw
+        # ICMPv4 - for ping and path MTU discovery
         ip protocol icmp icmp type {
             destination-unreachable,
             time-exceeded,
@@ -455,7 +457,7 @@ table inet filter {
             echo-request
         } accept
 
-        # ICMPv6 — необходимо для NDP и PMTUD на IPv6
+        # ICMPv6 - for NDP
         ip6 nexthdr icmpv6 icmpv6 type {
             destination-unreachable,
             packet-too-big,
@@ -469,20 +471,28 @@ table inet filter {
             nd-neighbor-solicit
         } accept
 
-        # DHCP-клиент: eth0 получает IP по DHCP от Keenetic
+        # DHCP-client: eth0 gets IP from Keenetic
         iifname "eth0" udp sport 67 udp dport 68 accept
 
-        # SSH из LAN и VPN
-        tcp dport 22 ip saddr { $LAN_NET, $VPN_NET } accept
+        # SSH from TRUSTED_NET and VPN_NET
+        tcp dport 22 ip saddr { $TRUSTED_NET, $VPN_NET } accept
 
-        # HTTPS из LAN (split-horizon DNS возвращает 192.168.1.15)
-        # IoT-трафик попадает сюда же — после SNAT в Keenetic source становится 192.168.1.1
-        iifname "eth0" tcp dport 443 ip saddr $LAN_NET accept
+        # HTTPS from TRUSTED_NET (split-horizon DNS returns 192.168.1.15)
+        iifname "eth0" tcp dport 443 ip saddr $TRUSTED_NET accept
 
-        # HTTPS через wg0:
-        #   - от VPS (10.0.0.1) — публичный трафик с PROXY-protocol
-        #   - от VPN-клиентов (10.8.0.0/24) — внутренние запросы к сервисам
+        # HTTPS through wg0:
+        #   - from VPS (10.0.0.1) - public traffic with PROXY-protocol
+        #   - from VPN-clients (10.8.0.0/24) - internal requests to services
         iifname "wg0" tcp dport 443 ip saddr { $VPS_WG, $VPN_NET } accept
+
+        # Internal Traefik API - only with DockerHost (Homepage)
+        iifname "eth0" tcp dport 8079 ip saddr $DOCKERHOST_IP accept
+
+        # Prometheus metrics for Traefik - Monitoring (Prometheus)
+        iifname "eth0" tcp dport 8081 ip saddr $MONITORING_IP accept
+
+        # Prometheus metrics for CrowdSec - Monitoring (Prometheus)
+        iifname "eth0" tcp dport 6060 ip saddr $MONITORING_IP accept
     }
 
     chain forward {
@@ -492,13 +502,13 @@ table inet filter {
         ct state established,related accept
         ct state invalid drop
 
-        # Anti-spoofing: пакет на wg0 может иметь source только из VPN или от VPS
+        # Anti-spoofing: packet on wg0 can have source only from VPN or from VPS
         iifname "wg0" ip saddr != { $VPN_NET, $VPS_WG } drop
 
-        # Anti-spoofing: пакет с eth0 не может выдавать себя за VPN-клиента или VPS
+        # Anti-spoofing: packet on eth0 cannot pretend to be a VPN-client or VPS
         iifname "eth0" ip saddr { $VPN_NET, $VPS_WG } drop
 
-        # VPN-клиенты → LAN: полный доступ без ограничений по портам
+        # VPN-clients → LAN: full access without restrictions on ports
         iifname "wg0" oifname "eth0" ip saddr $VPN_NET accept
     }
 
@@ -513,11 +523,13 @@ table ip nat {
         jump wg-nat
     }
 
-    # MASQUERADE правила добавляются динамически из wg0 PostUp
+    # MASQUERADE rules are added dynamically from wg0 PostUp
     chain wg-nat {
     }
 }
 ```
+
+Порт 8079 — внутренний Traefik API для виджета Homepage на DockerHost. Порты 8081 (метрики Traefik) и 6060 (метрики CrowdSec engine) открыты только для Monitoring LXC (`192.168.1.19`), который их скрейпит; наружу и в остальную LAN они закрыты политикой drop.
 
 #### Резервное копирование
 
@@ -564,6 +576,10 @@ CrowdSec engine крутится на Traefik LXC рядом с Traefik. Bouncer
 
 - LAPI слушает только `127.0.0.1:8080`.
 - Bouncer работает в режиме `stream` — раз в 60 секунд пуллит из LAPI полный список банов и держит локальный кэш в памяти. При недоступности LAPI плагин продолжает работать с последней версией кэша: ранее забаненные IP остаются забаненными, новые баны не появляются до восстановления engine'а. Это сдвигает поведение от «при падении LAPI защита почти мгновенно деградирует к fail-open» к «защита замораживается на последнем состоянии». Архитектурно у этого плагина (`maxlerebourg/crowdsec-bouncer-traefik-plugin`) явного `defaultDecision: block` (fail-closed) режима нет — при достаточно длительном downtime engine'а новые атаки фильтроваться не будут. Защиту от этого даёт `Restart=always` в systemd-юните crowdsec.service (рестарт через 60 сек после падения).
+
+### 7.4. Prometheus-метрики
+
+CrowdSec engine отдаёт метрики Prometheus на `192.168.1.15:6060` — секция `prometheus` в `/etc/crowdsec/config.yaml` (`enabled: true`, `level: full`, `listen_addr: 192.168.1.15`, `listen_port: 6060`). Доступ к порту ограничен на nftables Traefik LXC только адресом Monitoring LXC (см. §6.7). Метрики покрывают активные баны по происхождению (свои детекты `crowdsec` против community-фида `CAPI`) и причине/сценарию, срабатывания сценариев (bucket overflow), поток парсинга логов и запросы к LAPI. Скрейпится стеком мониторинга (см. §14.3, дашборд CrowdSec / Security в §14.4).
 
 ## 8. Vaultwarden LXC (192.168.1.17)
 
@@ -1362,6 +1378,10 @@ Gotify опубликован через Traefik как `gotify.kvasok.xyz` по
 - **AdGuard Home (192.168.1.2)** — DNS, в том числе split-horizon `gotify.kvasok.xyz` → 192.168.1.15.
 - **Backup-сервер (192.168.1.11)** — для PBS-снапшотов.
 
+### 13.8. Приложение grafana-alerts
+
+Для алертинга Grafana в Gotify заведено отдельное приложение `grafana-alerts` со своим токеном. Grafana шлёт в него уведомления о срабатывании правил алертинга через webhook на Gotify API (см. §14.9). Токен приложения хранится в provisioning-конфиге контакта на стороне Grafana, в Gotify это обычное приложение-источник наравне с прочими.
+
 ## 14. Monitoring LXC (192.168.1.19)
 
 Стек observability вынесен в отдельный LXC `104` (hostname `monitoring`) на основном Proxmox-хосте. Ключевой принцип: система мониторинга не должна работать на том хосте, который она наблюдает, — иначе при его падении мониторинг падает вместе с ним именно тогда, когда нужен больше всего. Поэтому Prometheus и Grafana вынесены из Docker на DockerHost в собственный LXC. Стек развёрнут нативно (без Docker), по тому же паттерну, что и остальная инфраструктура.
@@ -1384,12 +1404,16 @@ CTID `104`, hostname `monitoring`, IP `192.168.1.19/24`, gw `192.168.1.1`, Debia
 - **pbs-exporter** (natrontech, Go-бинарь) — ходит в PBS API на порт 8007 под токеном `monitoring@pbs!pbs-exporter` с ролью `Audit`. Тот же identity-паттern, что и `monitoring@pbs!homepage` (см. раздел 12.1.1).
 - **blackbox_exporter** — HTTP-пробы сервисов через их публичные имена (`*.kvasok.xyz`) плюс контроль срока истечения TLS-сертификатов. Scrape-интервал 60 секунд.
 - **restic-метрики** — скрипт `/usr/local/sbin/restic-metrics.sh` на бэкап-сервере, запускается ежечасно systemd-таймером под юзером `rest-server`. Локально опрашивает все три restic-репо в `/mnt/data/restic/` с encryption-паролями из `/etc/restic-retention/`, парсит `restic snapshots --json` через `jq`, атомарно пишет `.prom`-файлы (`mktemp` + `mv`) в textfile-каталог node_exporter. Доступ к каталогу дан добавлением `rest-server` в группу `node_exporter` и `chmod 775` на каталог. Это даёт в Prometheus возраст последнего restic-снапшота по каждому сервису — тихо сломавшийся бэкап становится наблюдаемым.
+- **Метрики Traefik** — нативный Prometheus-эндпоинт Traefik на отдельном entrypoint `metrics` (`192.168.1.15:8081`). Scrape-интервал 30 секунд. Даёт RPS, коды ответов по классам, латентность по сервисам и трафик. Доступ к порту с Monitoring LXC открыт на nftables Traefik (см. §6.7).
+- **Метрики CrowdSec** — нативный Prometheus-эндпоинт CrowdSec engine (`192.168.1.15:6060`, см. §7.4). Scrape-интервал 30 секунд. Активные баны, источники решений, срабатывания сценариев, парсинг логов, LAPI.
 
 ### 14.4 Дашборды Grafana
 
-- **Proxmox Host** (uid `proxmox-host`) — статус гостей, ZFS ARC, hit rate, заполнение storage, CPU/RAM по гостям.
-- **Сервисы / Endpoints** (uid `services-endpoints`) — `probe_success` по сервисам, срок истечения TLS-сертификатов, HTTP-коды, длительность проб.
-- **Backups / PBS** (uid `backups-pbs`) — свежесть и состояние бэкапов PBS и restic.
+- **Traefik** (uid `traefik`) — RPS, ошибки 5xx, исходящий трафик, коды ответов по классам, запросы и латентность p95 по сервисам, трафик по сервисам.
+- **CrowdSec / Security** (uid `crowdsec`) — активные баны (всего, локальные детекты против CAPI), баны по происхождению и причине, срабатывания сценариев, парсинг логов, запросы к LAPI.
+- **Proxmox** (uid `pve`) — статус гостей, ZFS ARC, hit rate, заполнение storage, CPU/RAM по гостям.
+- **Homelab Services** (uid `homelab-services`) — `probe_success` по сервисам, срок истечения TLS-сертификатов, HTTP-коды, длительность проб.
+- **PBS+Restic** (uid `backups`) — свежесть и состояние бэкапов PBS и restic, host-метрики бэкап-сервера, заполнение datastore.
 
 ### 14.5 Публикация
 
@@ -1465,3 +1489,65 @@ table inet filter {
 - **Бэкап-сервер (192.168.1.11)** — node_exporter, PBS API (через `monitoring@pbs!pbs-exporter`) и restic-метрики.
 - **Traefik LXC (192.168.1.15)** — публикация Grafana и цель blackbox-проб публичных сервисов.
 - **AdGuard Home (192.168.1.2)** — DNS, в том числе split-horizon `grafana.kvasok.xyz` → 192.168.1.15.
+
+### 14.9. Алертинг (Grafana Alerting → Gotify)
+
+Grafana отправляет алерты в Gotify через webhook-contact point, настроенный декларативно через provisioning. Канал доставки: Grafana (Monitoring LXC) → Traefik (`gotify.kvasok.xyz`) → Gotify (LXC) → push на телефон через VPS. Алертинг рассчитан на проблемы, которые ломаются поодиночке при живой инфраструктуре (отдельный сервис, диск, бэкап, RAID) — для этих сценариев цепочка доставки цела. Сценарий «легла вся инфраструктура» алертинг не покрывает: при падении Traefik/сети/VPS уведомление не уйдёт, потому что Gotify сам отрезан; для этого нужна внешняя точка наблюдения вне LAN.
+
+Контакт использует тип `webhook`, а не родной `gotify` — в Grafana 13 типа контакта `gotify` нет. Сообщения уходят на `https://gotify.kvasok.xyz/message?token=<токен приложения grafana-alerts>` через домен, а не напрямую на `192.168.1.16:8060` — это сохраняет модель «Gotify доступен только через Traefik» без отдельного firewall-исключения для Monitoring LXC. Под алерты в Gotify заведено приложение `grafana-alerts` (см. §13.8). Для медленных не-срочных алертов лишнее звено Traefik в цепочке некритично: до срабатывания порога есть часы и дни.
+
+Provisioning-файлы лежат в `/etc/grafana/provisioning/alerting/` (provisioned-сущности read-only в UI, управляются только файлами):
+
+- `contactpoints.yaml` — контакт `gotify` (webhook на Gotify API).
+- `policies.yaml` — notification policy: весь трафик алертов в контакт `gotify`.
+- `rules-backups.yaml` — группа правил `backups`.
+- `rules-capacity.yaml` — группа правил `capacity`.
+
+Контакт `contactpoints.yaml`:
+
+```yaml
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: gotify
+    receivers:
+      - uid: gotify-main
+        type: webhook
+        settings:
+          url: https://gotify.kvasok.xyz/message?token=<токен приложения grafana-alerts>
+          httpMethod: POST
+        disableResolveMessage: false
+```
+
+Notification policy `policies.yaml`:
+
+```yaml
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: gotify
+    group_by:
+      - grafana_folder
+      - alertname
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+```
+
+Все правила ссылаются на datasource Prometheus по его uid `PBFA97CFB590B2093`, лежат в папке `Alerts`, interval группы 5m, состоят из запроса A (instant PromQL) и порогового условия C. Тексты правил на английском.
+
+Группа `backups` (порог 48 часов — пропущенный суточный цикл, `for: 15m`, severity `warning`):
+
+- `pbs-backup-stale` — `(time() - pbs_snapshot_vm_last_timestamp) / 3600 > 48`. Гость PBS не бэкапился больше 48 часов.
+- `restic-backup-stale` — `(time() - restic_last_snapshot_timestamp_seconds) / 3600 > 48`. Restic-репозиторий сервиса не обновлялся больше 48 часов.
+
+Группа `capacity`:
+
+- `pbs-datastore-full` — `pbs_used{datastore="Homelab"} / pbs_size{datastore="Homelab"} * 100 > 90`, `for: 10m`, severity `warning`.
+- `pbs-system-disk-full` — `pbs_host_disk_used / pbs_host_disk_total * 100 > 90`, `for: 10m`, severity `warning`. Системный (OS) диск PBS, не datastore.
+- `pve-storage-full` — `pve_disk_usage_bytes{id=~"storage/.*"} / pve_disk_size_bytes{id=~"storage/.*"} * 100 > 90` по всем storage Proxmox (zguests, local, pbs-homelab), `for: 10m`, severity `warning`.
+- `pbs-raid-degraded` — `node_md_degraded{instance="pbs"} > 0`, `for: 0m` (мгновенно), severity `critical`. RAID0 без избыточности — реагировать немедленно.
+
+Правила `pbs-datastore-full` и `pve-storage-full` для `pbs-homelab` смотрят на физически один и тот же RAID0-массив, поэтому при его переполнении возможен дубль уведомления (от обоих правил) — оставлено осознанно для надёжности.
