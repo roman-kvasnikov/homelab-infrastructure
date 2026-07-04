@@ -95,7 +95,7 @@ NVMe:
 
 ### PBS
 
-Целевое хранилище бэкапов — Proxmox Backup Server на `192.168.10.15` (MGMT). Storage `pbs`, datastore `main`, namespaces `pve-main` и `pve-mini` (раздельно по хосту-источнику). Детали PBS, restic и retention — в `backup.md`.
+Целевое хранилище бэкапов — Proxmox Backup Server на `192.168.10.15` (MGMT). Storage `pbs`, datastore `Homelab`, namespaces `pve-mini` и `pve` (раздельно по хосту-источнику). Детали PBS, restic и retention — в `backup.md`.
 
 ---
 
