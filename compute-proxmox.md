@@ -61,6 +61,7 @@ description: |
 | 530 | DockerHost | VM | SERVICES (50) | `192.168.50.30` |
 | 540 | Dev | VM | SERVICES (50) | `192.168.50.40` |
 | 550 | Be-Free.Online | VM | SERVICES (50) | `192.168.50.50` |
+| 199 | Ansible | LXC | MGMT (10) | `192.168.10.99` |
 
 CTID кодирует VLAN: первая цифра — номер сегмента (`4xx` — DMZ, `5xx` — SERVICES), остальные — хостовая часть адреса. Детали каждого сервиса — в соответствующих документах (`ingress-traefik.md`, `identity-authelia.md`, `services-core.md`, `services-dockerhost.md`, `monitoring.md`).
 
