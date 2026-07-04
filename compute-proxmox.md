@@ -33,7 +33,7 @@ description: |
 | 101 | OPNsense | VM | WAN + все VLAN | шлюз `.1` в каждом VLAN |
 | 102 | Omada Controller | LXC | MGMT (10) | `192.168.10.31` |
 | 103 | AmneziaWG | LXC | INFRA (20) | `192.168.20.11` |
-| 104 | Xray | VM | INFRA (20) | `192.168.20.12` |
+| 104 | Xray | LXC | INFRA (20) | `192.168.20.12` |
 
 **OPNsense (101)** — маршрутизатор и firewall сети. `net0` → `vmbr0` (WAN), `net1` → `vmbr1` (LAN-транк со всеми VLAN). CPU type `host`, virtio-сеть, hardware offload отключён. Детали — в `home-network.md` и `edge-vpn.md`.
 
