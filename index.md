@@ -52,7 +52,7 @@ description: |
 
 | Документ | Область |
 | :--- | :--- |
-| **`Homelab-Infrastructure.md`** | Этот файл — индекс, высокоуровневая архитектура, глоссарий. |
+| **`index.md`** | Этот файл — индекс, высокоуровневая архитектура, глоссарий. |
 | **`conventions.md`** | Канонические шаблоны: базлайн LXC, nftables сервисного контейнера, systemd-sandbox, hardening SSH, паттерн restic + rest-server, соглашения об именах. Остальные документы ссылаются сюда. |
 | **`home-network.md`** | Сеть: VLAN-схема и адресация, OPNsense (WAN, интерфейсы, DHCP, Unbound, firewall), коммутатор и раскладка портов, беспроводная сеть (Keenetic AP), DNS, потоки трафика. |
 | **`compute-proxmox.md`** | Гипервизоры: PVE-Mini и PVE-Main, storage и ZFS, лимиты ресурсов гостей, UPS/NUT, инвентарь VM и LXC. |
