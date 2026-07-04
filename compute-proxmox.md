@@ -87,7 +87,7 @@ SATA SSD:
 
 NVMe:
 └── zguests (ZFS pool, lz4, ashift=12, volblocksize=16k)
-    ├── system-диски всех LXC (Traefik, Vaultwarden, Authelia, Monitoring, Gotify)
+    ├── system-диски всех LXC (Traefik, Vaultwarden, Authelia, Monitoring, Gotify, Ansible)
     └── system-диски VM (DockerHost, Dev, Be-Free.Online)
 ```
 
