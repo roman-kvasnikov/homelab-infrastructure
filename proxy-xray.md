@@ -84,36 +84,55 @@ Forward-прокси:
 
 ```nft
 #!/usr/sbin/nft -f
+
 flush ruleset
 
-define MGMT_NET    = 192.168.10.0/24
-define VPN_NET     = 10.8.0.0/24
+define MGMT_NET     = 192.168.10.0/24
+define AMNEZIAWG_IP = 192.168.20.11
 
 table inet filter {
     chain input {
         type filter hook input priority filter; policy drop;
 
+        # Loopback
         iifname "lo" accept
+
+        # Conntrack
         ct state established,related accept
         ct state invalid drop
 
+        # ICMPv4 - for ping and path MTU discovery
         ip protocol icmp icmp type {
-            destination-unreachable, time-exceeded, parameter-problem, echo-request
+            destination-unreachable,
+            time-exceeded,
+            parameter-problem,
+            echo-request
         } accept
+
+        # ICMPv6 - for NDP
         ip6 nexthdr icmpv6 icmpv6 type {
-            destination-unreachable, packet-too-big, time-exceeded, parameter-problem,
-            echo-request, echo-reply,
-            nd-router-advert, nd-router-solicit, nd-neighbor-advert, nd-neighbor-solicit
+            destination-unreachable,
+            packet-too-big,
+            time-exceeded,
+            parameter-problem,
+            echo-request,
+            echo-reply,
+            nd-router-advert,
+            nd-router-solicit,
+            nd-neighbor-advert,
+            nd-neighbor-solicit
         } accept
 
-        # SSH - only from MGMT and VPN
-        tcp dport 22 ip saddr { $MGMT_NET, $VPN_NET } accept
+        # SSH - only from MGMT_NET and AMNEZIAWG_IP
+        tcp dport 22 ip saddr { $MGMT_NET, $AMNEZIAWG_IP } accept
 
-        # Xray forward-proxy ports (socks/http) for LAN consumers
+        # Xray proxy-ports (socks/http) - from anywhere in LAN
         tcp dport { 10808, 10809 } accept
 
-        # Xray transparent redirect port (TVs via REDIRECT)
+	# Xray transparent redirect port (TVs via REDIRECT)
         tcp dport 12345 accept
+
+        # Everything else falls into policy drop
     }
 
     chain forward {
@@ -133,7 +152,7 @@ table ip xray_nat {
         ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, 224.0.0.0/4, 255.255.255.255 } return
 
         # Forwarded TCP traffic (from TVs) -> local Xray redirect port
-        ip protocol tcp redirect to :12345
+        ip protocol tcp counter redirect to :12345
     }
 }
 ```
