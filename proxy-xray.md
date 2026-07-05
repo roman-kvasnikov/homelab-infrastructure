@@ -157,7 +157,7 @@ table ip xray_nat {
 }
 ```
 
-Цепочка `forward` пока `policy accept` (VM транзитно форвардит трафик телевизоров) — ужесточается при общем hardening. Прокси-порты `10808/10809` открыты без ограничения источника — сужаются до SERVICES при hardening. SSH — из MGMT и VPN по общему канону (см. `conventions.md`). SSH ужесточён drop-in'ом `10-hardening.conf` (см. `conventions.md`).
+Цепочка `forward` пока `policy accept` (VM транзитно форвардит трафик телевизоров) — ужесточается при общем hardening. Прокси-порты `10808/10809` открыты без ограничения источника — сужаются до SERVICES при hardening. SSH — из MGMT и AmneziaWG по общему канону (см. `conventions.md`). SSH ужесточён drop-in'ом `10-hardening.conf` (см. `conventions.md`).
 
 ## 6. sysctl
 
