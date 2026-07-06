@@ -194,15 +194,11 @@ table inet filter {
 }
 ```
 
-Правило MASQUERADE в `wg-nat` добавляется не статически, а через `PostUp` в `/etc/wireguard/wg0.conf` при подъёме туннеля (`nft add rule ip nat wg-nat ip saddr 10.8.0.0/24 oifname eth0 masquerade`), очищается через `PostDown`. Порядок загрузки: `nftables.service` создаёт пустую chain `wg-nat`, затем `wg-quick@wg0` вставляет правило. При перезагрузке только nftables без переподнятия wg0 правило теряется — нужен `systemctl restart wg-quick@wg0`.
-
 SSH ужесточён общим drop-in `10-hardening.conf` (см. `conventions.md`), аутентификация по ключам, brute-force прикрыт коллекцией CrowdSec `crowdsecurity/sshd`.
 
 ## 8. CrowdSec
 
 CrowdSec engine работает на Traefik LXC рядом с Traefik; bouncer интегрирован как плагин Traefik (Yaegi).
-
-**Текущее состояние: плагин CrowdSec временно отключён.** Причина — при старте плагин скачивается с `plugins.traefik.io`, а сам engine обращается к `api.crowdsec.net`; оба хоста в моменты недоступны из сети (внешняя связность к части AWS-диапазонов, мешающий IPv6), из-за чего Traefik при старте не мог поднять роуты с middleware `crowdsec`. Плагин отключён, сервисы работают без него. Возврат CrowdSec — в бэклоге (разобраться с доступностью внешних эндпоинтов; вариант — перейти на `localPlugins`, чтобы убрать сетевую зависимость при старте). Раздел ниже описывает целевую конфигурацию.
 
 ### 8.1. Коллекции
 
@@ -210,7 +206,7 @@ CrowdSec engine работает на Traefik LXC рядом с Traefik; bouncer
 
 ### 8.2. Whitelist на уровне engine
 
-Доверенные внутренние сети (MGMT, INFRA, TRUSTED, IOT) и VPN-подсеть — их IP не банятся.
+Доверенные внутренние сети (MGMT, INFRA, TRUSTED, IOT) — их IP не банятся.
 
 ### 8.3. Нюансы
 
