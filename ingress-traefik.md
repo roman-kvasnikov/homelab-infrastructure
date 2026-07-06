@@ -109,9 +109,9 @@ sourceRange:
 
 ## 7. Файрвол (nftables)
 
-Traefik — точка входа всего HTTP-трафика, поэтому фильтрация консервативна: whitelist с `policy drop`. В отличие от типовых сервисных LXC (см. `conventions.md`), у Traefik nftables специфичен — он терминирует туннель к VPS, принимает 443 из внутренних VLAN и отдаёт метрики Monitoring. Две таблицы: `inet filter` (фильтрация) и `ip nat` (masquerade VPN-трафика через wg0, правило добавляется динамически из PostUp туннеля).
+Traefik — точка входа всего HTTP-трафика, поэтому фильтрация консервативна: whitelist с `policy drop`. В отличие от типовых сервисных LXC (см. `conventions.md`), у Traefik nftables специфичен — он терминирует туннель к VPS, принимает 443 из внутренних VLAN и отдаёт метрики Monitoring.
 
-Что разрешено во входящих: loopback и conntrack established/related; базовые ICMP; SSH (22) из MGMT и VPN; HTTPS (443) на `eth0` из внутренних доверенных VLAN (через split-horizon клиенты идут на `192.168.40.11`); HTTPS (443) на `wg0` от VPS (`10.0.0.1`, публичный трафик с PROXY protocol) и VPN-подсети; внутренний Traefik API (8079) только с DockerHost (виджет Homepage); метрики Traefik (8081) и CrowdSec (6060) только с Monitoring LXC (`192.168.50.21`).
+Что разрешено во входящих: loopback и conntrack established/related; базовые ICMP; SSH (22) из MGMT и AMNEZIAWG_IP; HTTPS (443) на `eth0` из внутренних доверенных VLAN (через split-horizon клиенты идут на `192.168.40.11`); HTTPS (443) на `wg0` от VPS (`10.0.0.1`, публичный трафик с PROXY protocol) и VPN-подсети; внутренний Traefik API (8079) только с DockerHost (виджет Homepage); метрики Traefik (8081) и CrowdSec (6060) только с Monitoring LXC (`192.168.50.21`).
 
 ```nft
 #!/usr/sbin/nft -f
