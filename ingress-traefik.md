@@ -115,14 +115,18 @@ Traefik — точка входа всего HTTP-трафика, поэтому
 
 ```nft
 #!/usr/sbin/nft -f
+
 flush ruleset
 
-define MGMT_NET      = 192.168.10.0/24
-define INFRA_NET     = 192.168.20.0/24
-define TRUSTED_NET   = 192.168.30.0/24
-define IOT_NET       = 192.168.60.0/24
-define VPN_NET       = 10.8.0.0/24
-define VPS_WG        = 10.0.0.1
+define VPS_WG  = 10.0.0.1
+
+define MGMT_NET = 192.168.10.0/24
+define INFRA_NET = 192.168.20.0/24
+define TRUSTED_NET = 192.168.30.0/24
+define SERVICES_NET = 192.168.50.0/24
+define IOT_NET = 192.168.60.0/24
+
+define AMNEZIAWG_IP = 192.168.20.11
 define MONITORING_IP = 192.168.50.21
 define DOCKERHOST_IP = 192.168.50.30
 
@@ -130,65 +134,62 @@ table inet filter {
     chain input {
         type filter hook input priority filter; policy drop;
 
+        # Loopback
         iifname "lo" accept
+
+        # Conntrack
         ct state established,related accept
         ct state invalid drop
 
+        # ICMPv4 - for ping and path MTU discovery
         ip protocol icmp icmp type {
-            destination-unreachable, time-exceeded, parameter-problem, echo-request
+            destination-unreachable,
+            time-exceeded,
+            parameter-problem,
+            echo-request
         } accept
+
+        # ICMPv6 - for NDP
         ip6 nexthdr icmpv6 icmpv6 type {
-            destination-unreachable, packet-too-big, time-exceeded, parameter-problem,
-            echo-request, echo-reply,
-            nd-router-advert, nd-router-solicit, nd-neighbor-advert, nd-neighbor-solicit
+            destination-unreachable,
+            packet-too-big,
+            time-exceeded,
+            parameter-problem,
+            echo-request,
+            echo-reply,
+            nd-router-advert,
+            nd-router-solicit,
+            nd-neighbor-advert,
+            nd-neighbor-solicit
         } accept
 
-        # SSH from MGMT and VPN
-        tcp dport 22 ip saddr { $MGMT_NET, $VPN_NET } accept
+        # SSH from MGMT_NET and AMNEZIAWG_IP
+        tcp dport 22 ip saddr { $MGMT_NET, $AMNEZIAWG_IP } accept
 
-        # HTTPS from internal trusted VLANs (split-horizon returns 192.168.40.11)
-        iifname "eth0" tcp dport 443 ip saddr { $MGMT_NET, $INFRA_NET, $TRUSTED_NET, $IOT_NET } accept
+        # HTTPS from internal VLANs via split-horizon DNS (returns 192.168.40.11)
+        iifname "eth0" tcp dport 443 ip saddr { $MGMT_NET, $INFRA_NET, $TRUSTED_NET, $SERVICES_NET, $IOT_NET } accept
 
-        # HTTPS through wg0: VPS public traffic (PROXY protocol) + VPN clients
-        iifname "wg0" tcp dport 443 ip saddr { $VPS_WG, $VPN_NET } accept
+        # HTTPS through wg0 from VPS (10.0.0.1) - public traffic with PROXY-protocol
+        iifname "wg0" tcp dport 443 ip saddr $VPS_WG accept
 
-        # Internal Traefik API - only from DockerHost (Homepage widget)
+        # Internal Traefik API - only with DockerHost (Homepage)
         iifname "eth0" tcp dport 8079 ip saddr $DOCKERHOST_IP accept
 
-        # Prometheus metrics for Traefik - only from Monitoring
+        # Prometheus metrics for Traefik - Monitoring (Prometheus)
         iifname "eth0" tcp dport 8081 ip saddr $MONITORING_IP accept
 
-        # Prometheus metrics for CrowdSec - only from Monitoring
+        # Prometheus metrics for CrowdSec - Monitoring (Prometheus)
         iifname "eth0" tcp dport 6060 ip saddr $MONITORING_IP accept
+
+	# Everything else falls into policy drop
     }
 
     chain forward {
         type filter hook forward priority filter; policy drop;
-
-        ct state established,related accept
-        ct state invalid drop
-
-        # Anti-spoofing on wg0: source only from VPN or VPS
-        iifname "wg0" ip saddr != { $VPN_NET, $VPS_WG } drop
-        # Anti-spoofing on eth0: cannot pretend to be VPN client or VPS
-        iifname "eth0" ip saddr { $VPN_NET, $VPS_WG } drop
-
-        # VPN clients -> LAN (full access; segmentation is enforced on OPNsense)
-        iifname "wg0" oifname "eth0" ip saddr $VPN_NET accept
     }
 
     chain output {
         type filter hook output priority filter; policy accept;
-    }
-}
-
-table ip nat {
-    chain postrouting {
-        type nat hook postrouting priority srcnat; policy accept;
-        jump wg-nat
-    }
-    # MASQUERADE rules are added dynamically from wg0 PostUp
-    chain wg-nat {
     }
 }
 ```
