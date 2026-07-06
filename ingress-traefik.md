@@ -200,6 +200,8 @@ SSH ужесточён общим drop-in `10-hardening.conf` (см. `convention
 
 CrowdSec engine работает на Traefik LXC рядом с Traefik; bouncer интегрирован как плагин Traefik (Yaegi).
 
+CrowdSec engine и плагин Traefik работают. Была проблема с загрузкой обновлений: плагин скачивается с `plugins.traefik.io`, а engine синхронизируется с `api.crowdsec.net` (CAPI), и оба хоста не поднимались через сеть провайдера напрямую. Решено заворотом исходящего трафика CrowdSec через Xray-прокси: в systemd-юните `crowdsec.service` прописаны переменные `HTTP_PROXY`/`HTTPS_PROXY` на HTTP-порт Xray (`http://192.168.20.12:10809`), после чего скачивание коллекций и CAPI-синхронизация проходят через гео-обход. Это добавляет зависимость engine от Xray-VM для обновлений и community-фида (при недоступности Xray новые коллекции и CAPI не обновятся, но локальные детекты и уже загруженные сценарии продолжают работать).
+
 ### 8.1. Коллекции
 
 `crowdsecurity/appsec-generic-rules`, `crowdsecurity/appsec-virtual-patching`, `crowdsecurity/base-http-scenarios`, `crowdsecurity/http-cve`, `crowdsecurity/linux`, `crowdsecurity/sshd`, `crowdsecurity/traefik`, `crowdsecurity/whitelist-good-actors`.
@@ -230,4 +232,5 @@ CrowdSec engine отдаёт Prometheus-метрики на `192.168.40.11:6060`
 - **Unbound на OPNsense** — split-horizon `*.kvasok.xyz → 192.168.40.11`, DNS для DNS-01 ACME.
 - **Бэкенды в SERVICES** — Vaultwarden, Authelia, Gotify, Monitoring, DockerHost — цели проксирования (доступ по явным firewall-разрешениям).
 - **Monitoring LXC (`192.168.50.21`)** — скрейпит метрики Traefik (8081) и CrowdSec (6060).
+- - **Xray (`192.168.20.12`)** — HTTP-прокси для исходящего трафика CrowdSec (обновление коллекций, CAPI-синхронизация) через `HTTP_PROXY`/`HTTPS_PROXY` в `crowdsec.service`.
 - **PBS (`192.168.10.15`)** — снапшоты LXC.
