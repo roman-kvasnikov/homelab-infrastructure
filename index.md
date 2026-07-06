@@ -52,11 +52,13 @@ description: |
 
 | Документ | Область |
 | :--- | :--- |
-| **`index.md`** | Этот файл — индекс, высокоуровневая архитектура, глоссарий. |
+| **`Homelab-Infrastructure.md`** | Этот файл — индекс, высокоуровневая архитектура, глоссарий. |
 | **`conventions.md`** | Канонические шаблоны: базлайн LXC, nftables сервисного контейнера, systemd-sandbox, hardening SSH, паттерн restic + rest-server, соглашения об именах. Остальные документы ссылаются сюда. |
 | **`home-network.md`** | Сеть: VLAN-схема и адресация, OPNsense (WAN, интерфейсы, DHCP, Unbound, firewall), коммутатор и раскладка портов, беспроводная сеть (Keenetic AP), DNS, потоки трафика. |
 | **`compute-proxmox.md`** | Гипервизоры: PVE-Mini и PVE-Main, storage и ZFS, лимиты ресурсов гостей, UPS/NUT, инвентарь VM и LXC. |
-| **`edge-vpn.md`** | Точка входа и удалённый доступ: VPS, служебный WireGuard-туннель, AmneziaWG. |
+| **`edge-vps.md`** | Публичная точка входа: VPS, nginx L4 stream + PROXY protocol, служебный WireGuard-туннель к Traefik. |
+| **`vpn-amneziawg.md`** | Удалённый доступ в сеть: AmneziaWG (INFRA), обфускация, клиенты, маскарад, порт-форвард на OPNsense. |
+| **`proxy-xray.md`** | Xray-прокси (INFRA): гео-обход для сервисов (forward-прокси) и прозрачное проксирование телевизоров через REDIRECT. |
 | **`ingress-traefik.md`** | Traefik и CrowdSec: домены, сертификаты, entrypoints, middleware и цепочки, catch-all, метрики. |
 | **`identity-authelia.md`** | Authelia и общая модель аутентификации: IdP, forward-auth, OIDC, TOTP/WebAuthn, локальный Redis. |
 | **`services-core.md`** | Одноцелевые нативные LXC: Vaultwarden, Gotify. Тонкие карточки со ссылками на `conventions.md` плюс специфика. |
@@ -72,6 +74,7 @@ description: |
 - **Traefik** — reverse-proxy в DMZ, единственная точка входа HTTP-трафика в сеть; держит WG-туннель к VPS.
 - **VPS** — внешний сервер, точка публикации сервисов; проксирует HTTPS в WG-туннель к Traefik на L4, сертификаты не хранит.
 - **AmneziaWG** — обфусцированный VPN-сервер (INFRA) для удалённого доступа в сеть по белому IP дома.
+- **Xray** — прокси гео-обхода (INFRA): forward-прокси для сервисов и прозрачное проксирование телевизоров; через него же ходит исходящий трафик CrowdSec.
 - **Unbound** — рекурсивный DNS-резолвер на OPNsense со split-horizon для `*.kvasok.xyz`.
 - **Keenetic (Giga / Speedster)** — два роутера в режиме точки доступа (L2), вещают SSID с привязкой к VLAN.
 - **Omada** — контроллер управляемого коммутатора TP-Link.
