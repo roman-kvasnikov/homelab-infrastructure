@@ -1,5 +1,5 @@
 ---
-name: proxy-xray
+name: xray
 description: |
   Xray-прокси для гео-обхода: VM в INFRA. Два режима — forward-прокси (SOCKS/HTTP) для явных потребителей (arr-стек на DockerHost) и прозрачное проксирование телевизоров через REDIRECT + policy-routing на OPNsense. Документ описывает конфиг Xray, nftables, sysctl, автозапуск и связку с OPNsense. Используй для вопросов по гео-обходу, проксированию телевизоров, arr-стека.
 ---
@@ -52,7 +52,7 @@ Forward-прокси:
 
 ## 4. Прозрачное проксирование телевизоров (REDIRECT)
 
-Телевизоры не умеют настраивать прокси, поэтому их трафик заворачивается на Xml на уровне сети. Используется схема **REDIRECT** (nat-DNAT на локальный порт), а не TPROXY. REDIRECT проще и надёжнее: не требует policy-routing на loopback, отдельной таблицы маршрутизации, transparent-сокета и отключения rp_filter как обязательного условия. Ограничение REDIRECT — работает только с TCP; UDP/QUIC перехватить нельзя, поэтому QUIC (UDP 443) блокируется на OPNsense, и телевизоры откатываются на TCP, который проксируется.
+Телевизоры не умеют настраивать прокси, поэтому их трафик заворачивается на Xray на уровне сети. Используется схема **REDIRECT** (nat-DNAT на локальный порт), а не TPROXY. REDIRECT проще и надёжнее: не требует policy-routing на loopback, отдельной таблицы маршрутизации, transparent-сокета и отключения rp_filter как обязательного условия. Ограничение REDIRECT — работает только с TCP; UDP/QUIC перехватить нельзя, поэтому QUIC (UDP 443) блокируется на OPNsense, и телевизоры откатываются на TCP, который проксируется.
 
 ### 4.1. На Xray-VM
 
@@ -129,7 +129,7 @@ table inet filter {
         # Xray proxy-ports (socks/http) - from anywhere in LAN
         tcp dport { 10808, 10809 } accept
 
-	# Xray transparent redirect port (TVs via REDIRECT)
+        # Xray transparent redirect port (TVs via REDIRECT)
         tcp dport 12345 accept
 
         # Everything else falls into policy drop
@@ -157,7 +157,7 @@ table ip xray_nat {
 }
 ```
 
-Цепочка `forward` пока `policy accept` (VM транзитно форвардит трафик телевизоров) — ужесточается при общем hardening. Прокси-порты `10808/10809` открыты без ограничения источника — сужаются до SERVICES при hardening. SSH — из MGMT и AmneziaWG по общему канону (см. `conventions.md`). SSH ужесточён drop-in'ом `10-hardening.conf` (см. `conventions.md`).
+Цепочка `forward` пока `policy accept` (VM транзитно форвардит трафик телевизоров) — ужесточается при общем hardening. Прокси-порты `10808/10809` открыты без ограничения источника — сужаются до SERVICES при hardening. SSH — из MGMT и AmneziaWG по общему канону (см. `02-conventions.md`). SSH ужесточён drop-in'ом `10-hardening.conf` (см. `02-conventions.md`).
 
 ## 6. sysctl
 
