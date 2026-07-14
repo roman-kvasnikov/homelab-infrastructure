@@ -1,18 +1,18 @@
 ---
-name: ingress-traefik
+name: traefik
 description: |
   Traefik — reverse-proxy и единственная точка входа HTTP-трафика в сеть. LXC в DMZ, держит служебный WG-туннель к VPS, терминирует TLS, применяет middleware-цепочки и защиту CrowdSec. Документ описывает домены и сертификаты, конфигурацию, TLS, catch-all, middleware, доверие заголовкам, nftables, CrowdSec и метрики. Используй для вопросов по reverse-proxy, публикации сервисов, middleware, CrowdSec.
 ---
 
 # Traefik
 
-Traefik — reverse-proxy для всех сервисов и единственная точка, через которую HTTP-трафик попадает к бэкендам (и снаружи через VPS, и изнутри сети). Развёрнут LXC в сегменте DMZ, `192.168.40.11`. Держит служебный WireGuard-клиент `wg0` к VPS (второй конец туннеля публикации, см. `edge-vps.md`), терминирует TLS, применяет middleware и маршрутизирует запросы на бэкенды в SERVICES и других VLAN.
+Traefik — reverse-proxy для всех сервисов и единственная точка, через которую HTTP-трафик попадает к бэкендам (и снаружи через VPS, и изнутри сети). Развёрнут LXC в сегменте DMZ, `192.168.40.11`. Держит служебный WireGuard-клиент `wg0` к VPS (второй конец туннеля публикации, см. `06-edge-vps.md`), терминирует TLS, применяет middleware и маршрутизирует запросы на бэкенды в SERVICES и других VLAN.
 
-DMZ по замыслу содержит только Traefik — все чувствительные сервисы стоят в SERVICES, и Traefik ходит к ним по явным firewall-разрешениям. Базлайн LXC (unprivileged + `nesting=1`) — см. `conventions.md`.
+DMZ по замыслу содержит только Traefik — все чувствительные сервисы стоят в SERVICES, и Traefik ходит к ним по явным firewall-разрешениям. Базлайн LXC (unprivileged + `nesting=1`) — см. `02-conventions.md`.
 
 ## 1. Домены и сертификаты
 
-Основной домен — `kvasok.xyz`, wildcard `*.kvasok.xyz` публикует self-hosted сервисы. Снаружи `*.kvasok.xyz` указывает на VPS (см. `edge-vps.md`); внутри сети Unbound через split-horizon резолвит те же имена в локальный адрес Traefik (`192.168.40.11`).
+Основной домен — `kvasok.xyz`, wildcard `*.kvasok.xyz` публикует self-hosted сервисы. Снаружи `*.kvasok.xyz` указывает на VPS (см. `06-edge-vps.md`); внутри сети Unbound через split-horizon резолвит те же имена в локальный адрес Traefik (`192.168.40.11`).
 
 Сертификаты Let's Encrypt получает **Traefik через DNS-01 challenge** (wildcard `*.kvasok.xyz`). VPS сертификаты не хранит — он работает на L4. TLS-резолвер по умолчанию для `*.kvasok.xyz` — `timewebcloud`; для отдельных хостов есть `namecheap`. DNS-01 через `namecheap` требует обращения к API Namecheap, недоступному напрямую через провайдера, поэтому исходящий трафик Traefik для этого заворачивается через Xray-прокси (см. раздел 8).
 
@@ -87,7 +87,7 @@ external-chain-no-rate-limit:
 
 `internal-chain` — только доверенные внутренние сети. Применяется к внутренним сервисам: Traefik dashboard, Proxmox UI, Omada, Portainer, pgAdmin. `external-chain` — публичные сервисы с обычным rate-limit. `external-chain-strict` — где нужен жёсткий лимит (Vaultwarden). `external-chain-no-rate-limit` — где лимит мешает (Immich: листание галереи даёт множество параллельных запросов, при обычном лимите пользователя банит).
 
-Многие сервисы дополнительно прикрыты Authelia через middleware `authelia` (forwardAuth), обычно как `internal-chain + authelia` или `external-chain + authelia` (см. `identity-authelia.md`). Одно осознанное исключение — Gotify, несовместимый с forward-auth (см. `services-core.md`).
+Многие сервисы дополнительно прикрыты Authelia через middleware `authelia` (forwardAuth), обычно как `internal-chain + authelia` или `external-chain + authelia` (см. `08-authelia.md`). Одно осознанное исключение — Gotify, несовместимый с forward-auth (см. `services-core.md`).
 
 ### 5.4. Доверенные сети (`trusted`)
 
@@ -95,13 +95,13 @@ external-chain-no-rate-limit:
 
 ```
 sourceRange:
-  - 192.168.10.0/24   # MGMT network
-  - 192.168.20.0/24   # INFRA network
-  - 192.168.30.0/24   # TRUSTED network
-  - 192.168.60.0/24   # IOT network
+  - 192.168.10.0/24 # MGMT network
+  - 192.168.20.0/24 # INFRA network
+  - 192.168.30.0/24 # TRUSTED network
+  - 192.168.60.0/24 # IOT network
 ```
 
-Важная особенность после перехода на маскарад AmneziaWG: VPN-клиенты приходят к Traefik под адресом AmneziaWG-LXC (`192.168.20.11`, INFRA), а не под своим `10.8.0.<N>`. Поэтому фактически VPN покрывается правилом `192.168.20.0/24` (INFRA). Побочный эффект: весь INFRA (включая Xray) попадает в `trusted` наравне с VPN — приемлемо, так как это доверенные инфраструктурные хосты. Подробнее про модель адресации VPN — в `vpn-amneziawg.md`.
+Есть одна особенность у VPN клиентов, то что они приходят к Traefik под адресом AmneziaWG-LXC (`192.168.20.11`, INFRA), а не под своим `10.8.0.<N>`. Фактически доступ VPN клиентов покрывается правилом `192.168.20.0/24` (INFRA). Побочный эффект: весь INFRA (включая Xray) попадает в `trusted` наравне с VPN — приемлемо, так как это доверенные инфраструктурные хосты. Подробнее про модель адресации VPN — в `08-amneziawg.md`.
 
 ## 6. Доверие к заголовкам
 
@@ -109,7 +109,7 @@ sourceRange:
 
 ## 7. Файрвол (nftables)
 
-Traefik — точка входа всего HTTP-трафика, поэтому фильтрация консервативна: whitelist с `policy drop`. В отличие от типовых сервисных LXC (см. `conventions.md`), у Traefik nftables специфичен — он терминирует туннель к VPS, принимает 443 из внутренних VLAN и отдаёт метрики Monitoring.
+Traefik — точка входа всего HTTP-трафика, поэтому фильтрация консервативна: whitelist с `policy drop`. В отличие от типовых сервисных LXC (см. `02-conventions.md`), у Traefik nftables специфичен — он терминирует туннель к VPS, принимает 443 из внутренних VLAN и отдаёт метрики Monitoring.
 
 Что разрешено во входящих: loopback и conntrack established/related; базовые ICMP; SSH (22) из MGMT и AMNEZIAWG_IP; HTTPS (443) на `eth0` из внутренних доверенных VLAN (через split-horizon клиенты идут на `192.168.40.11`); HTTPS (443) на `wg0` от VPS (`10.0.0.1`, публичный трафик с PROXY protocol) и VPN-подсети; внутренний Traefik API (8079) только с DockerHost (виджет Homepage); метрики Traefik (8081) и CrowdSec (6060) только с Monitoring LXC (`192.168.50.21`).
 
@@ -181,7 +181,7 @@ table inet filter {
         # Prometheus metrics for CrowdSec - Monitoring (Prometheus)
         iifname "eth0" tcp dport 6060 ip saddr $MONITORING_IP accept
 
-	# Everything else falls into policy drop
+        # Everything else falls into policy drop
     }
 
     chain forward {
@@ -194,7 +194,7 @@ table inet filter {
 }
 ```
 
-SSH ужесточён общим drop-in `10-hardening.conf` (см. `conventions.md`), аутентификация по ключам, brute-force прикрыт коллекцией CrowdSec `crowdsecurity/sshd`.
+SSH ужесточён общим drop-in `10-hardening.conf` (см. `02-conventions.md`), аутентификация по ключам, brute-force прикрыт коллекцией CrowdSec `crowdsecurity/sshd`.
 
 ## 8. CrowdSec
 
@@ -228,7 +228,7 @@ CrowdSec engine отдаёт Prometheus-метрики на `192.168.40.11:6060`
 
 ## 11. Зависимости
 
-- **VPS (`edge-vps.md`)** — второй конец wg0-туннеля, источник публичного трафика с PROXY protocol.
+- **VPS (`06-edge-vps.md`)** — второй конец wg0-туннеля, источник публичного трафика с PROXY protocol.
 - **Unbound на OPNsense** — split-horizon `*.kvasok.xyz → 192.168.40.11`, DNS для DNS-01 ACME.
 - **Бэкенды в SERVICES** — Vaultwarden, Authelia, Gotify, Monitoring, DockerHost — цели проксирования (доступ по явным firewall-разрешениям).
 - **Monitoring LXC (`192.168.50.21`)** — скрейпит метрики Traefik (8081) и CrowdSec (6060).
