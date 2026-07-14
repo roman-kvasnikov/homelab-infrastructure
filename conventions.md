@@ -221,7 +221,7 @@ Encryption-пароли репо хранятся на двух хостах (н
 - **UPPER_SNAKE_CASE** — для ENV-констант и `define`-блоков nftables (`TRAEFIK_IP`, `MGMT_NET`).
 - Без type-префиксов в именах.
 
-**PBS:** storage `pbs`, datastore `main`, namespaces `pve-main` и `pve-mini`.
+**PBS:** storage `pbs`, datastore `Homelab`, namespaces `pve` и `pve-mini`.
 
 **Язык:** документация и обсуждение — на русском; комментарии в конфигах и заголовки алертов — на английском.
 
