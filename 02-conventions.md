@@ -38,6 +38,7 @@ description: |
 
 ```nft
 #!/usr/sbin/nft -f
+
 flush ruleset
 
 define MGMT_NET     = 192.168.10.0/24
