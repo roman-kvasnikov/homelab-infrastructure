@@ -50,6 +50,7 @@ description: |
 | `192.168.10.25` | Точка доступа Keenetic Giga |
 | `192.168.10.26` | Точка доступа Keenetic Speedster |
 | `192.168.10.31` | Omada Controller |
+| `192.168.10.99` | Ansible |
 
 ### 3.2. INFRA (VLAN 20)
 
