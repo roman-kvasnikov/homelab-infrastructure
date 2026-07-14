@@ -1,5 +1,5 @@
 ---
-name: vpn-amneziawg
+name: amneziawg
 description: |
   AmneziaWG — обфусцированный VPN-сервер для удалённого доступа в домашнюю сеть. LXC в INFRA, вход по белому IP через порт-форвард на OPNsense, минуя VPS. Документ описывает конфигурацию сервера, обфускацию, клиентов, маскарад, nftables, автозапуск и связку с OPNsense. Используй для вопросов по удалённому доступу к дому, VPN, AmneziaWG.
 ---
@@ -156,7 +156,7 @@ table ip nat {
 }
 ```
 
-`udp dport 51820 accept` без ограничения источника — VPN-подключения приходят с меняющихся внешних адресов. SSH — из MGMT и VPN по общему канону (см. `conventions.md`); VPN здесь реальный (`10.8.0.<N>`), потому что SSH к самому LXC доставляется локально и не маскарадится. Forward пропускает VPN-клиентов из `awg0` в `eth0` (наружу), обратное направление — только по conntrack established. IP forwarding включён (`net.ipv4.ip_forward=1`), без него LXC не маршрутизирует трафик клиентов.
+`udp dport 51820 accept` без ограничения источника — VPN-подключения приходят с меняющихся внешних адресов. SSH — из MGMT и VPN по общему канону (см. `02-conventions.md`); VPN здесь реальный (`10.8.0.<N>`), потому что SSH к самому LXC доставляется локально и не маскарадится. Forward пропускает VPN-клиентов из `awg0` в `eth0` (наружу), обратное направление — только по conntrack established. IP forwarding включён (`net.ipv4.ip_forward=1`), без него LXC не маршрутизирует трафик клиентов.
 
 ## 6. OPNsense: порт-форвард
 
@@ -176,7 +176,7 @@ Environment=AWG_QUICK_USERSPACE_IMPLEMENTATION=amneziawg-go
 
 ## 8. SSH
 
-SSH ужесточён общим drop-in `/etc/ssh/sshd_config.d/10-hardening.conf` (см. `conventions.md`). Доступ к порту 22 ограничен на nftables источниками MGMT и VPN. Аутентификация — по ключам.
+SSH ужесточён общим drop-in `/etc/ssh/sshd_config.d/10-hardening.conf` (см. `02-conventions.md`). Доступ к порту 22 ограничен на nftables источниками MGMT и VPN. Аутентификация — по ключам.
 
 ## 9. Зависимости
 
