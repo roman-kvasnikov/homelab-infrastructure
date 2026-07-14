@@ -35,13 +35,13 @@ description: |
 | 103 | AmneziaWG | LXC | INFRA (20) | `192.168.20.11` |
 | 104 | Xray | VM | INFRA (20) | `192.168.20.12` |
 
-**OPNsense (101)** — маршрутизатор и firewall сети. `net0` → `vmbr0` (WAN), `net1` → `vmbr1` (LAN-транк со всеми VLAN). CPU type `host`, virtio-сеть, hardware offload отключён. Детали — в `home-network.md` и `edge-vpn.md`.
+**OPNsense (101)** — маршрутизатор и firewall сети. `net0` → `vmbr0` (WAN), `net1` → `vmbr1` (LAN-транк со всеми VLAN). CPU type `host`, virtio-сеть, hardware offload отключён. Детали — в `home-network.md` и `vpn-amneziawg.md`.
 
 **Omada Controller (102)** — контроллер управляемого коммутатора TP-Link. Одна нога в MGMT.
 
-**AmneziaWG (103)** — обфусцированный VPN-сервер удалённого доступа. Непривилегированный LXC с пробросом TUN-устройства. Детали — в `edge-vpn.md`.
+**AmneziaWG (103)** — обфусцированный VPN-сервер удалённого доступа. Непривилегированный LXC с пробросом TUN-устройства. Детали — в `vpn-amneziawg.md`.
 
-**Xray (104)** — прокси для гео-обхода. Детали — в `edge-vpn.md`.
+**Xray (104)** — прокси для гео-обхода. Детали — в `proxy-xray.md`.
 
 ---
 
