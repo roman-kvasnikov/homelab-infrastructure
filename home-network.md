@@ -106,9 +106,13 @@ DockerHost несёт основной стек сервисов в Docker (ме
 
 | Порт | Назначение | Режим |
 | :--- | :--- | :--- |
-| 1 | Точка доступа Keenetic Giga | Trunk (native MGMT/10, tagged 30/60/80) |
-| 5 | PVE-Main | Trunk |
+| 1 | Точка доступа Keenetic Giga | Trunk (native MGMT/10, tagged 30/60/70/80) |
+| 2 | Точка доступа Keenetic Speedster | Trunk (native MGMT/10, tagged 30/60/70/80) |
+| 3 | Резерв |
+| 4 | Резерв |
+| 5 | PVE | Trunk |
 | 6 | PBS | Access MGMT/10 |
+| 7 | MGMT Notebook | Access MGMT/10 |
 | 8 | Uplink к PVE-Mini (`nic1`) | Trunk |
 
 Транк-порты несут native-трафик как MGMT (VLAN 10) и тегированные пользовательские VLAN.
