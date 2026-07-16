@@ -41,9 +41,10 @@ description: |
 
 flush ruleset
 
-define MGMT_NET     = 192.168.10.0/24
-define AMNEZIAWG_IP = 192.168.20.11
-define TRAEFIK_IP   = 192.168.40.11
+define MGMT_NET   = 192.168.10.0/24
+define VPN_NET    = 10.8.0.0/24
+
+define TRAEFIK_IP = 192.168.40.11
 
 table inet filter {
     chain input {
@@ -78,8 +79,8 @@ table inet filter {
             nd-neighbor-solicit
         } accept
 
-        # SSH from MGMT and VPN
-        tcp dport 22 ip saddr { $MGMT_NET, $AMNEZIAWG_IP } accept
+        # SSH - only from MGMT_NET and VPN_NET
+        tcp dport 22 ip saddr { $MGMT_NET, $VPN_NET } accept
 
         # Service only from Traefik
         tcp dport <SERVICE_PORT> ip saddr $TRAEFIK_IP accept
@@ -97,7 +98,7 @@ table inet filter {
 }
 ```
 
-Разрешено: loopback, ответные пакеты (conntrack established/related), базовые ICMPv4/ICMPv6 (ping и NDP), SSH (22) из `MGMT_NET` и `AMNEZIAWG_IP`, порт сервиса только с адреса Traefik. Прямой доступ к порту сервиса из других сегментов мимо Traefik закрыт — соединение не устанавливается, отдаётся timeout.
+Разрешено: loopback, ответные пакеты (conntrack established/related), базовые ICMPv4/ICMPv6 (ping и NDP), SSH (22) из `MGMT_NET` и `VPN_NET`, порт сервиса только с адреса Traefik. Прямой доступ к порту сервиса из других сегментов мимо Traefik закрыт — соединение не устанавливается, отдаётся timeout.
 
 ### Отклонения от шаблона
 
