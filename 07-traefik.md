@@ -87,7 +87,7 @@ external-chain-no-rate-limit:
 
 `internal-chain` — только доверенные внутренние сети. Применяется к внутренним сервисам: Traefik dashboard, Proxmox UI, Omada, Portainer, pgAdmin. `external-chain` — публичные сервисы с обычным rate-limit. `external-chain-strict` — где нужен жёсткий лимит (Vaultwarden). `external-chain-no-rate-limit` — где лимит мешает (Immich: листание галереи даёт множество параллельных запросов, при обычном лимите пользователя банит).
 
-Многие сервисы дополнительно прикрыты Authelia через middleware `authelia` (forwardAuth), обычно как `internal-chain + authelia` или `external-chain + authelia` (см. `08-authelia.md`). Одно осознанное исключение — Gotify, несовместимый с forward-auth (см. `services-core.md`).
+Многие сервисы дополнительно прикрыты Authelia через middleware `authelia` (forwardAuth), обычно как `internal-chain + authelia` или `external-chain + authelia` (см. `10-authelia.md`). Одно осознанное исключение — Gotify, несовместимый с forward-auth (см. `gotify.md`).
 
 ### 5.4. Доверенные сети (`trusted`)
 
@@ -109,7 +109,7 @@ sourceRange:
 
 Traefik — точка входа всего HTTP-трафика, поэтому фильтрация консервативна: whitelist с `policy drop`. В отличие от типовых сервисных LXC (см. `02-conventions.md`), у Traefik nftables специфичен — он терминирует туннель к VPS, принимает 443 из внутренних VLAN и отдаёт метрики Monitoring.
 
-Что разрешено во входящих: loopback и conntrack established/related; базовые ICMP; SSH (22) из MGMT_NET и VPN_NET; HTTPS (443) на `eth0` из внутренних доверенных VLAN (через split-horizon клиенты идут на `192.168.40.11`); HTTPS (443) на `wg0` от VPS (`10.0.0.1`, публичный трафик с PROXY protocol) и VPN-подсети; внутренний Traefik API (8079) только с DockerHost (виджет Homepage); метрики Traefik (8081) и CrowdSec (6060) только с Monitoring LXC (`192.168.50.21`).
+Что разрешено во входящих: loopback и conntrack established/related; базовые ICMP; SSH (22) из MGMT_NET и VPN_NET; HTTPS (443) на `eth0` из внутренних доверенных VLAN (через split-horizon клиенты идут на `192.168.40.11`); HTTPS (443) на `wg0` от VPS (`10.0.0.1`, публичный трафик с PROXY protocol); внутренний Traefik API (8079) только с DockerHost (виджет Homepage); метрики Traefik (8081) и CrowdSec (6060) только с Monitoring LXC (`192.168.50.21`).
 
 ```nft
 #!/usr/sbin/nft -f
@@ -222,12 +222,13 @@ CrowdSec engine отдаёт Prometheus-метрики на `192.168.40.11:6060`
 
 ## 10. Резервное копирование
 
-Только PBS-снапшот всего LXC в составе общего ежедневного pve-задания. Отдельный restic не заводится — критичного point-in-time состояния у Traefik нет; конфиги (`/etc/traefik/`, `/etc/nftables.conf`, `/etc/wireguard/wg0.conf`) маленькие, статичные и восстанавливаются вместе с LXC из PBS. См. `backup.md`.
+Только PBS-снапшот всего LXC в составе общего ежедневного pve-задания. Отдельный restic не заводится — критичного point-in-time состояния у Traefik нет; конфиги (`/etc/traefik/`, `/etc/nftables.conf`, `/etc/wireguard/wg0.conf`) маленькие, статичные и восстанавливаются вместе с LXC из PBS. См. `05-backup.md`.
 
 ## 11. Зависимости
 
 - **VPS (`06-edge-vps.md`)** — второй конец wg0-туннеля, источник публичного трафика с PROXY protocol.
 - **Unbound на OPNsense** — split-horizon `*.kvasok.xyz → 192.168.40.11`, DNS для DNS-01 ACME.
+- **AmneziaWG (`08-amneziawg.md`)** — VPN-клиенты приходят на Traefik с реальными адресами `10.8.0.<N>`: подсеть маршрутизируется, а не маскарадится. Учтено в `trusted`, whitelist CrowdSec и nftables (`VPN_NET`).
 - **Бэкенды в SERVICES** — Vaultwarden, Authelia, Gotify, Monitoring, DockerHost — цели проксирования (доступ по явным firewall-разрешениям).
 - **Monitoring LXC (`192.168.50.21`)** — скрейпит метрики Traefik (8081) и CrowdSec (6060).
 - **Xray (`192.168.20.12`)** — HTTP-прокси для исходящего трафика Traefik (скачивание плагина CrowdSec с `plugins.traefik.io`, выпуск сертификатов через `namecheap`) и CrowdSec engine (CAPI-синхронизация), через `HTTP_PROXY`/`HTTPS_PROXY` в `traefik.service` и `crowdsec.service`.
