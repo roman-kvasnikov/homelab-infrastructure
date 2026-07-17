@@ -95,13 +95,11 @@ external-chain-no-rate-limit:
 
 ```
 sourceRange:
-  - 192.168.10.0/24 # MGMT network
-  - 192.168.20.0/24 # INFRA network
-  - 192.168.30.0/24 # TRUSTED network
-  - 192.168.60.0/24 # IOT network
+  - 192.168.10.0/24   # MGMT network
+  - 192.168.30.0/24   # TRUSTED network
+  - 192.168.60.0/24   # IOT network
+  - 10.8.0.0/24       # VPN network
 ```
-
-Есть одна особенность у VPN клиентов, то что они приходят к Traefik под адресом AmneziaWG-LXC (`192.168.20.11`, INFRA), а не под своим `10.8.0.<N>`. Фактически доступ VPN клиентов покрывается правилом `192.168.20.0/24` (INFRA). Побочный эффект: весь INFRA (включая Xray) попадает в `trusted` наравне с VPN — приемлемо, так как это доверенные инфраструктурные хосты. Подробнее про модель адресации VPN — в `08-amneziawg.md`.
 
 ## 6. Доверие к заголовкам
 
@@ -111,22 +109,22 @@ sourceRange:
 
 Traefik — точка входа всего HTTP-трафика, поэтому фильтрация консервативна: whitelist с `policy drop`. В отличие от типовых сервисных LXC (см. `02-conventions.md`), у Traefik nftables специфичен — он терминирует туннель к VPS, принимает 443 из внутренних VLAN и отдаёт метрики Monitoring.
 
-Что разрешено во входящих: loopback и conntrack established/related; базовые ICMP; SSH (22) из MGMT и AMNEZIAWG_IP; HTTPS (443) на `eth0` из внутренних доверенных VLAN (через split-horizon клиенты идут на `192.168.40.11`); HTTPS (443) на `wg0` от VPS (`10.0.0.1`, публичный трафик с PROXY protocol) и VPN-подсети; внутренний Traefik API (8079) только с DockerHost (виджет Homepage); метрики Traefik (8081) и CrowdSec (6060) только с Monitoring LXC (`192.168.50.21`).
+Что разрешено во входящих: loopback и conntrack established/related; базовые ICMP; SSH (22) из MGMT_NET и VPN_NET; HTTPS (443) на `eth0` из внутренних доверенных VLAN (через split-horizon клиенты идут на `192.168.40.11`); HTTPS (443) на `wg0` от VPS (`10.0.0.1`, публичный трафик с PROXY protocol) и VPN-подсети; внутренний Traefik API (8079) только с DockerHost (виджет Homepage); метрики Traefik (8081) и CrowdSec (6060) только с Monitoring LXC (`192.168.50.21`).
 
 ```nft
 #!/usr/sbin/nft -f
 
 flush ruleset
 
-define VPS_WG  = 10.0.0.1
+define VPS_WG        = 10.0.0.1
 
-define MGMT_NET = 192.168.10.0/24
-define INFRA_NET = 192.168.20.0/24
-define TRUSTED_NET = 192.168.30.0/24
-define SERVICES_NET = 192.168.50.0/24
-define IOT_NET = 192.168.60.0/24
+define MGMT_NET      = 192.168.10.0/24
+define TRUSTED_NET   = 192.168.30.0/24
+define SERVICES_NET  = 192.168.50.0/24
+define IOT_NET       = 192.168.60.0/24
 
-define AMNEZIAWG_IP = 192.168.20.11
+define VPN_NET       = 10.8.0.0/24
+
 define MONITORING_IP = 192.168.50.21
 define DOCKERHOST_IP = 192.168.50.30
 
@@ -163,11 +161,11 @@ table inet filter {
             nd-neighbor-solicit
         } accept
 
-        # SSH from MGMT_NET and AMNEZIAWG_IP
-        tcp dport 22 ip saddr { $MGMT_NET, $AMNEZIAWG_IP } accept
+        # SSH from MGMT_NET and VPN_NET
+        tcp dport 22 ip saddr { $MGMT_NET, $VPN_NET } accept
 
         # HTTPS from internal VLANs via split-horizon DNS (returns 192.168.40.11)
-        iifname "eth0" tcp dport 443 ip saddr { $MGMT_NET, $INFRA_NET, $TRUSTED_NET, $SERVICES_NET, $IOT_NET } accept
+        iifname "eth0" tcp dport 443 ip saddr { $MGMT_NET, $TRUSTED_NET, $SERVICES_NET, $IOT_NET, $VPN_NET } accept
 
         # HTTPS through wg0 from VPS (10.0.0.1) - public traffic with PROXY-protocol
         iifname "wg0" tcp dport 443 ip saddr $VPS_WG accept
@@ -208,7 +206,7 @@ CrowdSec engine и плагин Traefik работают, но была проб
 
 ### 8.2. Whitelist на уровне engine
 
-Доверенные внутренние сети (MGMT, INFRA, TRUSTED, IOT) — их IP не банятся.
+Доверенные внутренние сети (MGMT, TRUSTED, IOT, VPN) — их IP не банятся.
 
 ### 8.3. Нюансы
 
