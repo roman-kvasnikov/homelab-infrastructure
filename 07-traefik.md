@@ -1,18 +1,18 @@
 ---
-name: traefik
+name: ingress-traefik
 description: |
   Traefik — reverse-proxy и единственная точка входа HTTP-трафика в сеть. LXC в DMZ, держит служебный WG-туннель к VPS, терминирует TLS, применяет middleware-цепочки и защиту CrowdSec. Документ описывает домены и сертификаты, конфигурацию, TLS, catch-all, middleware, доверие заголовкам, nftables, CrowdSec и метрики. Используй для вопросов по reverse-proxy, публикации сервисов, middleware, CrowdSec.
 ---
 
 # Traefik
 
-Traefik — reverse-proxy для всех сервисов и единственная точка, через которую HTTP-трафик попадает к бэкендам (и снаружи через VPS, и изнутри сети). Развёрнут LXC в сегменте DMZ, `192.168.40.11`. Держит служебный WireGuard-клиент `wg0` к VPS (второй конец туннеля публикации, см. `06-edge-vps.md`), терминирует TLS, применяет middleware и маршрутизирует запросы на бэкенды в SERVICES и других VLAN.
+Traefik — reverse-proxy для всех сервисов и единственная точка, через которую HTTP-трафик попадает к бэкендам (и снаружи через VPS, и изнутри сети). Развёрнут LXC в сегменте DMZ, `192.168.40.11`. Держит служебный WireGuard-клиент `wg0` к VPS (второй конец туннеля публикации, см. `edge-vps.md`), терминирует TLS, применяет middleware и маршрутизирует запросы на бэкенды в SERVICES и других VLAN.
 
-DMZ по замыслу содержит только Traefik — все чувствительные сервисы стоят в SERVICES, и Traefik ходит к ним по явным firewall-разрешениям. Базлайн LXC (unprivileged + `nesting=1`) — см. `02-conventions.md`.
+DMZ по замыслу содержит только Traefik — все чувствительные сервисы стоят в SERVICES, и Traefik ходит к ним по явным firewall-разрешениям. Базлайн LXC (unprivileged + `nesting=1`) — см. `conventions.md`.
 
 ## 1. Домены и сертификаты
 
-Основной домен — `kvasok.xyz`, wildcard `*.kvasok.xyz` публикует self-hosted сервисы. Снаружи `*.kvasok.xyz` указывает на VPS (см. `06-edge-vps.md`); внутри сети Unbound через split-horizon резолвит те же имена в локальный адрес Traefik (`192.168.40.11`).
+Основной домен — `kvasok.xyz`, wildcard `*.kvasok.xyz` публикует self-hosted сервисы. Снаружи `*.kvasok.xyz` указывает на VPS (см. `edge-vps.md`); внутри сети Unbound через split-horizon резолвит те же имена в локальный адрес Traefik (`192.168.40.11`).
 
 Сертификаты Let's Encrypt получает **Traefik через DNS-01 challenge** (wildcard `*.kvasok.xyz`). VPS сертификаты не хранит — он работает на L4. TLS-резолвер по умолчанию для `*.kvasok.xyz` — `timewebcloud`; для отдельных хостов есть `namecheap`. DNS-01 через `namecheap` требует обращения к API Namecheap, недоступному напрямую через провайдера, поэтому исходящий трафик Traefik для этого заворачивается через Xray-прокси (см. раздел 8).
 
@@ -24,7 +24,7 @@ Entrypoint `websecure` (443) принимает PROXY protocol только от
 
 ## 3. TLS-опции
 
-В `tls.options.default`: `minVersion: VersionTLS12`. Минимум именно 1.2, а не 1.3, потому что WebOS на LG TV не поддерживает TLS 1.3 — Jellyfin на нём при TLS 1.3 падает на handshake без записи в access-log. TLS 1.2 с современными cipher suites остаётся приемлемым уровнем. `curvePreferences`: X25519, P256, P384, P521. Современный набор cipher suites (ECDHE + GCM/ChaCha20). Default-сертификат-заглушка `/etc/traefik/certs/default.{crt,key}` отдаётся на запрос без подходящего SNI.
+В `tls.options.default`: `minVersion: VersionTLS12`. Минимум именно 1.2, а не 1.3, потому что WebOS на LG TV не поддерживает TLS 1.3 — Jellyfin на нём при TLS 1.3 падает на handshake без записи в access-log. TLS 1.2 остаётся приемлемым уровнем. `curvePreferences`: X25519, CurveP256, CurveP384, CurveP521. `sniStrict: false` — запрос без совпадающего SNI не отбрасывается, а получает default-сертификат-заглушку `/etc/traefik/certs/default.{crt,key}` (в `tls.stores.default.defaultCertificate`).
 
 ## 4. Catch-all роутер
 
@@ -40,78 +40,97 @@ Entrypoint `websecure` (443) принимает PROXY protocol только от
 | :--- | :--- |
 | `crowdsec` | плагин CrowdSec (LAPI `127.0.0.1:8080`, mode `stream`, обновление раз в 60 сек, при недоступности LAPI работает с кэшем) |
 | `allow-deny-all` | ipAllowList только `127.0.0.1/32` — фактически блок всего |
-| `allow-mgmt-ips` | ipAllowList доверенных админских сетей MGMT и VPN |
-| `allow-trusted-ips` | ipAllowList доверенных внутренних сетей (см. 5.4) |
-| `allow-media-ips` | ipAllowList доверенных внутренних сетей + IOT (см. 5.4) |
-| `security-headers-base` | contentTypeNosniff, forceSTS, includeSubdomains, STS 180 дней, X-Forwarded-Proto=https — базовый набор для любых HTTP-клиентов, включая API |
-| `security-headers-browser` | referrer policy, permissions policy (запрет camera/microphone/geolocation/USB/Bluetooth), CSP (`frame-ancestors 'self'`, `base-uri 'self'`, `form-action 'self'`) — заголовки только для браузерных клиентов |
-| `rate-limit` | average 50, burst 20, period 1s |
-| `rate-limit-strict` | average 10, burst 5, period 1s |
+| `allow-mgmt-ips` | ipAllowList: MGMT + VPN — только управляющая сеть (см. 5.4) |
+| `allow-trusted-ips` | ipAllowList: MGMT + TRUSTED + VPN — доверенные пользовательские сети (см. 5.4) |
+| `allow-media-ips` | ipAllowList: MGMT + TRUSTED + IOT + VPN — доверенные плюс телевизоры (см. 5.4) |
+| `headers-common` | contentTypeNosniff, forceSTS, includeSubdomains, STS 180 дней, X-Forwarded-Proto=https — базовый набор для любых HTTP-клиентов, включая API |
+| `headers-browser` | referrer policy, permissions policy (запрет camera/microphone/geolocation/USB/Bluetooth), CSP (`frame-ancestors 'self'`, `base-uri 'self'`, `form-action 'self'`) — заголовки только для браузерных клиентов |
+| `rate-default` | average 50, burst 20, period 1s |
+| `rate-strict` | average 10, burst 5, period 1s |
 | `buffering` | отключение буферизации (лимиты в 0) — для стримов и больших аплоадов |
 
 ### 5.2. Цепочки
 
 ```yaml
-headers-chain-html:
+headers-html:
   chain:
-    middlewares: [security-headers-base, security-headers-browser]
+    middlewares: [headers-common, headers-browser]
 
-headers-chain-api:
+headers-api:
   chain:
-    middlewares: [security-headers-base]
+    middlewares: [headers-common]
 
-internal-chain:
+chain-admin:
   chain:
-    middlewares: [trusted, headers-chain-html]
+    middlewares: [allow-mgmt-ips, headers-html]
 
-internal-chain-api:
+chain-internal:
   chain:
-    middlewares: [trusted, headers-chain-api]
+    middlewares: [allow-trusted-ips, headers-html]
 
-external-chain:
+chain-internal-api:
   chain:
-    middlewares: [crowdsec, rate-limit, headers-chain-html]
+    middlewares: [allow-trusted-ips, headers-api]
 
-external-chain-api:
+chain-external:
   chain:
-    middlewares: [crowdsec, rate-limit, headers-chain-api]
+    middlewares: [crowdsec, rate-default, headers-html]
 
-external-chain-strict:
+chain-external-api:
   chain:
-    middlewares: [crowdsec, rate-limit-strict, headers-chain-html]
+    middlewares: [crowdsec, rate-default, headers-api]
 
-external-chain-no-rate-limit:
+chain-external-strict:
   chain:
-    middlewares: [crowdsec, headers-chain-html]
+    middlewares: [crowdsec, rate-strict, headers-html]
+
+chain-external-unlimited:
+  chain:
+    middlewares: [crowdsec, headers-html]
 ```
 
 ### 5.3. Назначение цепочек
 
-`internal-chain` — только доверенные внутренние сети. Применяется к внутренним сервисам: Traefik dashboard, Proxmox UI, Omada, Portainer, pgAdmin. `external-chain` — публичные сервисы с обычным rate-limit. `external-chain-strict` — где нужен жёсткий лимит (Vaultwarden). `external-chain-no-rate-limit` — где лимит мешает (Immich: листание галереи даёт множество параллельных запросов, при обычном лимите пользователя банит).
+`chain-admin` — только управляющая сеть (MGMT + VPN). Применяется к админ-интерфейсам инфраструктуры: Traefik dashboard, Proxmox UI, Omada, OPNsense, Portainer, pgAdmin — доступ к ним только из management, даже TRUSTED не пускается. `chain-internal` — доверенные пользовательские сети (MGMT + TRUSTED + VPN). Для внутренних сервисов, к которым ходят обычные устройства пользователя. `chain-external` — публичные сервисы с обычным rate-limit. `chain-external-strict` — где нужен жёсткий лимит (Vaultwarden). `chain-external-unlimited` — где лимит мешает (Immich: листание галереи даёт множество параллельных запросов, при обычном лимите пользователя банит; Authelia: React SPA грузит десятки JS-чанков параллельно).
 
-Многие сервисы дополнительно прикрыты Authelia через middleware `authelia` (forwardAuth), обычно как `internal-chain + authelia` или `external-chain + authelia` (см. `10-authelia.md`). Одно осознанное исключение — Gotify, несовместимый с forward-auth (см. `gotify.md`).
+Отдельно стоит **media-доступ**: `allow-media-ips` (MGMT + TRUSTED + IOT + VPN) добавляет к доверенным сетям IOT — это нужно, чтобы телевизоры (в IOT) дотягивались до Jellyfin, оставаясь при этом отрезанными от прочих internal-сервисов. То есть IOT пускается только к медиа, а не ко всему internal (`chain-internal` его не включает). Это изолирует телевизоры: медиасервер им доступен, админки и остальные внутренние сервисы — нет.
 
-### 5.4. Доверенные сети (`trusted`)
+Многие сервисы дополнительно прикрыты Authelia через middleware `authelia` (forwardAuth), обычно как `chain-internal + authelia` или `chain-external + authelia` (см. `identity-authelia.md`). Одно осознанное исключение — Gotify, несовместимый с forward-auth (см. `gotify.md`).
 
-`trusted` ipAllowList покрывает внутренние сегменты, из которых разрешён доступ к internal-сервисам:
+### 5.4. Уровни доступа (ipAllowList)
 
+Вместо одного списка доверенных сетей — три уровня, по возрастанию охвата. Сервис получает нужный уровень через соответствующую цепочку.
+
+```yaml
+allow-mgmt-ips:        # chain-admin
+  - 192.168.10.0/24    # MGMT
+  - 10.8.0.0/24        # VPN
+
+allow-trusted-ips:     # chain-internal
+  - 192.168.10.0/24    # MGMT
+  - 192.168.30.0/24    # TRUSTED
+  - 10.8.0.0/24        # VPN
+
+allow-media-ips:       # media (Jellyfin)
+  - 192.168.10.0/24    # MGMT
+  - 192.168.30.0/24    # TRUSTED
+  - 192.168.60.0/24    # IOT (телевизоры)
+  - 10.8.0.0/24        # VPN
 ```
-sourceRange:
-  - 192.168.10.0/24   # MGMT network
-  - 192.168.30.0/24   # TRUSTED network
-  - 192.168.60.0/24   # IOT network
-  - 10.8.0.0/24       # VPN network
-```
+
+Градация: `allow-mgmt-ips` — самый узкий (только management + VPN), для админок; `allow-trusted-ips` добавляет TRUSTED (пользовательские устройства), для обычных internal-сервисов; `allow-media-ips` добавляет ещё и IOT, только для медиа. IOT (телевизоры) намеренно есть **только** в media-списке — телевизор дотягивается до Jellyfin, но не до админок и прочих internal-сервисов.
+
+Замечание по VPN и маскараду: во всех трёх списках VPN указан как `10.8.0.0/24`. При этом AmneziaWG маскарадит VPN-трафик в адрес своего LXC (`192.168.20.11`, INFRA) — то есть до Traefik VPN-клиент доходит под INFRA-адресом, а не под `10.8.0.<N>`. Значит, чтобы VPN-доступ к internal/admin-сервисам через эти списки работал как задумано, VPN должен приходить под своим адресом (маскарад снят, добавлен маршрут `10.8.0.0/24` на OPNsense) — либо в списки нужно добавить `192.168.20.0/24` (INFRA). Модель адресации VPN — в `vpn-amneziawg.md`; это место стоит держать согласованным с текущей схемой маскарада.
 
 ## 6. Доверие к заголовкам
 
-В CrowdSec-плагине `clientTrustedIPs` — доверенные внутренние сети (те же, что в `trusted`): запросы от них не банятся. `forwardedHeadersTrustedIPs: 10.0.0.1/32` — Traefik доверяет `X-Forwarded-*` заголовкам только от VPS (сосед по wg0). Это не даёт подделать реальный IP клиента через заголовок кому-либо, кроме доверенного VPS.
+В CrowdSec-плагине `clientTrustedIPs` — доверенные внутренние сети (MGMT, TRUSTED, IOT, VPN): запросы от них не банятся. `forwardedHeadersTrustedIPs: 10.0.0.1/32` — Traefik доверяет `X-Forwarded-*` заголовкам только от VPS (сосед по wg0). Это не даёт подделать реальный IP клиента через заголовок кому-либо, кроме доверенного VPS.
 
 ## 7. Файрвол (nftables)
 
-Traefik — точка входа всего HTTP-трафика, поэтому фильтрация консервативна: whitelist с `policy drop`. В отличие от типовых сервисных LXC (см. `02-conventions.md`), у Traefik nftables специфичен — он терминирует туннель к VPS, принимает 443 из внутренних VLAN и отдаёт метрики Monitoring.
+Traefik — точка входа всего HTTP-трафика, поэтому фильтрация консервативна: whitelist с `policy drop`. В отличие от типовых сервисных LXC (см. `conventions.md`), у Traefik nftables специфичен — он терминирует туннель к VPS, принимает 443 из внутренних VLAN и отдаёт метрики Monitoring. Две таблицы: `inet filter` (фильтрация) и `ip nat` (masquerade VPN-трафика через wg0, правило добавляется динамически из PostUp туннеля).
 
-Что разрешено во входящих: loopback и conntrack established/related; базовые ICMP; SSH (22) из MGMT_NET и VPN_NET; HTTPS (443) на `eth0` из внутренних доверенных VLAN (через split-horizon клиенты идут на `192.168.40.11`); HTTPS (443) на `wg0` от VPS (`10.0.0.1`, публичный трафик с PROXY protocol); внутренний Traefik API (8079) только с DockerHost (виджет Homepage); метрики Traefik (8081) и CrowdSec (6060) только с Monitoring LXC (`192.168.50.21`).
+Что разрешено во входящих: loopback и conntrack established/related; базовые ICMP; SSH (22) из MGMT и VPN; HTTPS (443) на `eth0` из внутренних доверенных VLAN (через split-horizon клиенты идут на `192.168.40.11`); HTTPS (443) на `wg0` от VPS (`10.0.0.1`, публичный трафик с PROXY protocol) и VPN-подсети; внутренний Traefik API (8079) только с DockerHost (виджет Homepage); метрики Traefik (8081) и CrowdSec (6060) только с Monitoring LXC (`192.168.50.21`).
 
 ```nft
 #!/usr/sbin/nft -f
@@ -181,7 +200,7 @@ table inet filter {
         # Prometheus metrics for CrowdSec - Monitoring (Prometheus)
         iifname "eth0" tcp dport 6060 ip saddr $MONITORING_IP accept
 
-        # Everything else falls into policy drop
+	      # Everything else falls into policy drop
     }
 
     chain forward {
@@ -194,13 +213,15 @@ table inet filter {
 }
 ```
 
-SSH ужесточён общим drop-in `10-hardening.conf` (см. `02-conventions.md`), аутентификация по ключам, brute-force прикрыт коллекцией CrowdSec `crowdsecurity/sshd`.
+Правило MASQUERADE в `wg-nat` добавляется не статически, а через `PostUp` в `/etc/wireguard/wg0.conf` при подъёме туннеля (`nft add rule ip nat wg-nat ip saddr 10.8.0.0/24 oifname eth0 masquerade`), очищается через `PostDown`. Порядок загрузки: `nftables.service` создаёт пустую chain `wg-nat`, затем `wg-quick@wg0` вставляет правило. При перезагрузке только nftables без переподнятия wg0 правило теряется — нужен `systemctl restart wg-quick@wg0`.
+
+SSH ужесточён общим drop-in `10-hardening.conf` (см. `conventions.md`), аутентификация по ключам, brute-force прикрыт коллекцией CrowdSec `crowdsecurity/sshd`.
 
 ## 8. CrowdSec
 
 CrowdSec engine работает на Traefik LXC рядом с Traefik; bouncer интегрирован как плагин Traefik (Yaegi).
 
-CrowdSec engine и плагин Traefik работают, но была проблема с исходящей связностью: плагин CrowdSec скачивается Traefik'ом с `plugins.traefik.io` при старте, engine синхронизируется с `api.crowdsec.net` (CAPI), а сам Traefik для DNS-01 через `namecheap` обращается к API Namecheap — эти хосты не поднимались через сеть провайдера напрямую. Решено заворотом исходящего трафика через Xray-прокси: переменные `HTTP_PROXY`/`HTTPS_PROXY` на HTTP-порт Xray (`http://192.168.20.12:10809`) прописаны в systemd-юнитах `traefik.service` (скачивание плагина + namecheap ACME) и `crowdsec.service` (CAPI). Это добавляет зависимость Traefik и CrowdSec от Xray-VM для обновления плагина, выпуска namecheap-сертификатов и community-фида (при недоступности Xray эти операции не пройдут, но уже загруженные плагин, сертификаты, сценарии и локальные детекты продолжают работать).
+CrowdSec engine и плагин Traefik работают. Была проблема с исходящей связностью: плагин CrowdSec скачивается Traefik'ом с `plugins.traefik.io` при старте, engine синхронизируется с `api.crowdsec.net` (CAPI), а сам Traefik для DNS-01 через `namecheap` обращается к API Namecheap — эти хосты не поднимались через сеть провайдера напрямую. Решено заворотом исходящего трафика через Xray-прокси: переменные `HTTP_PROXY`/`HTTPS_PROXY` на HTTP-порт Xray (`http://192.168.20.12:10809`) прописаны в systemd-юнитах `traefik.service` (скачивание плагина + namecheap ACME) и `crowdsec.service` (CAPI). Это добавляет зависимость Traefik и CrowdSec от Xray-VM для обновления плагина, выпуска namecheap-сертификатов и community-фида (при недоступности Xray эти операции не пройдут, но уже загруженные плагин, сертификаты, сценарии и локальные детекты продолжают работать).
 
 ### 8.1. Коллекции
 
@@ -208,7 +229,7 @@ CrowdSec engine и плагин Traefik работают, но была проб
 
 ### 8.2. Whitelist на уровне engine
 
-Доверенные внутренние сети (MGMT, TRUSTED, IOT, VPN) — их IP не банятся.
+Доверенные внутренние сети (MGMT, INFRA, TRUSTED, IOT) и VPN-подсеть — их IP не банятся.
 
 ### 8.3. Нюансы
 
@@ -224,13 +245,12 @@ CrowdSec engine отдаёт Prometheus-метрики на `192.168.40.11:6060`
 
 ## 10. Резервное копирование
 
-Только PBS-снапшот всего LXC в составе общего ежедневного pve-задания. Отдельный restic не заводится — критичного point-in-time состояния у Traefik нет; конфиги (`/etc/traefik/`, `/etc/nftables.conf`, `/etc/wireguard/wg0.conf`) маленькие, статичные и восстанавливаются вместе с LXC из PBS. См. `05-backup.md`.
+Только PBS-снапшот всего LXC в составе общего ежедневного pve-задания. Отдельный restic не заводится — критичного point-in-time состояния у Traefik нет; конфиги (`/etc/traefik/`, `/etc/nftables.conf`, `/etc/wireguard/wg0.conf`) маленькие, статичные и восстанавливаются вместе с LXC из PBS. См. `backup.md`.
 
 ## 11. Зависимости
 
-- **VPS (`06-edge-vps.md`)** — второй конец wg0-туннеля, источник публичного трафика с PROXY protocol.
+- **VPS (`edge-vps.md`)** — второй конец wg0-туннеля, источник публичного трафика с PROXY protocol.
 - **Unbound на OPNsense** — split-horizon `*.kvasok.xyz → 192.168.40.11`, DNS для DNS-01 ACME.
-- **AmneziaWG (`08-amneziawg.md`)** — VPN-клиенты приходят на Traefik с реальными адресами `10.8.0.<N>`: подсеть маршрутизируется, а не маскарадится. Учтено в `trusted`, whitelist CrowdSec и nftables (`VPN_NET`).
 - **Бэкенды в SERVICES** — Vaultwarden, Authelia, Gotify, Monitoring, DockerHost — цели проксирования (доступ по явным firewall-разрешениям).
 - **Monitoring LXC (`192.168.50.21`)** — скрейпит метрики Traefik (8081) и CrowdSec (6060).
 - **Xray (`192.168.20.12`)** — HTTP-прокси для исходящего трафика Traefik (скачивание плагина CrowdSec с `plugins.traefik.io`, выпуск сертификатов через `namecheap`) и CrowdSec engine (CAPI-синхронизация), через `HTTP_PROXY`/`HTTPS_PROXY` в `traefik.service` и `crowdsec.service`.
