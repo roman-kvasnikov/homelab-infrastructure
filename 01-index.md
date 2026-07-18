@@ -6,7 +6,7 @@ description: |
 
 # Домашняя инфраструктура
 
-Индекс и высокоуровневое описание homelab. Для конкретной области — сети, гипервизоров, reverse-proxy, аутентификации, бэкапов и т.д. — переходи в отдельный документ по карте в разделе 3. Общие шаблоны (базлайн LXC, nftables, systemd-sandbox, restic) вынесены в `conventions.md`, сервисные документы ссылаются на них вместо дублирования.
+Индекс и высокоуровневое описание homelab. Для конкретной области — сети, гипервизоров, reverse-proxy, аутентификации, бэкапов и т.д. — переходи в отдельный документ по карте в разделе 3. Общие шаблоны (базлайн LXC, nftables, systemd-sandbox, restic) вынесены в `02-conventions.md`, сервисные документы ссылаются на них вместо дублирования.
 
 ## 1. Общая архитектура
 
@@ -52,19 +52,21 @@ description: |
 
 | Документ | Область |
 | :--- | :--- |
-| **`Homelab-Infrastructure.md`** | Этот файл — индекс, высокоуровневая архитектура, глоссарий. |
-| **`conventions.md`** | Канонические шаблоны: базлайн LXC, nftables сервисного контейнера, systemd-sandbox, hardening SSH, паттерн restic + rest-server, соглашения об именах. Остальные документы ссылаются сюда. |
-| **`home-network.md`** | Сеть: VLAN-схема и адресация, OPNsense (WAN, интерфейсы, DHCP, Unbound, firewall), коммутатор и раскладка портов, беспроводная сеть (Keenetic AP), DNS, потоки трафика. |
-| **`compute-proxmox.md`** | Гипервизоры: PVE-Mini и PVE-Main, storage и ZFS, лимиты ресурсов гостей, UPS/NUT, инвентарь VM и LXC. |
-| **`edge-vps.md`** | Публичная точка входа: VPS, nginx L4 stream + PROXY protocol, служебный WireGuard-туннель к Traefik. |
-| **`vpn-amneziawg.md`** | Удалённый доступ в сеть: AmneziaWG (INFRA), обфускация, клиенты, маскарад, порт-форвард на OPNsense. |
-| **`proxy-xray.md`** | Xray-прокси (INFRA): гео-обход для сервисов (forward-прокси) и прозрачное проксирование телевизоров через REDIRECT. |
-| **`ingress-traefik.md`** | Traefik и CrowdSec: домены, сертификаты, entrypoints, middleware и цепочки, catch-all, метрики. |
-| **`identity-authelia.md`** | Authelia и общая модель аутентификации: IdP, forward-auth, OIDC, TOTP/WebAuthn, локальный Redis. |
-| **`services-core.md`** | Одноцелевые нативные LXC: Vaultwarden, Gotify. Тонкие карточки со ссылками на `conventions.md` плюс специфика. |
-| **`services-dockerhost.md`** | DockerHost VM и Docker-стек: ZFS-датасеты, networking, AppData, контейнеры, Samba. |
-| **`monitoring.md`** | Monitoring LXC: Prometheus, Grafana, экспортеры, дашборды, алертинг в Gotify. |
-| **`backup.md`** | Бэкап-сервер и PBS, rest-server, restic, трёхуровневая схема, retention, сценарий восстановления. |
+| **`01-index.md`** | Этот файл — индекс, высокоуровневая архитектура, глоссарий. |
+| **`02-conventions.md`** | Канонические шаблоны: базлайн LXC, nftables сервисного контейнера, systemd-sandbox, hardening SSH, паттерн restic + rest-server, соглашения об именах. Остальные документы ссылаются сюда. |
+| **`03-network.md`** | Сеть: VLAN-схема и адресация, OPNsense (WAN, интерфейсы, DHCP, Unbound, firewall), коммутатор и раскладка портов, беспроводная сеть (Keenetic AP), DNS, потоки трафика. |
+| **`04-proxmox.md`** | Гипервизоры: PVE-Mini и PVE-Main, storage и ZFS, лимиты ресурсов гостей, UPS/NUT, инвентарь VM и LXC. |
+| **`05-backup.md`** | Бэкап-сервер и PBS, rest-server, restic, трёхуровневая схема, retention, сценарий восстановления. |
+| **`06-edge-vps.md`** | Публичная точка входа: VPS, nginx L4 stream + PROXY protocol, служебный WireGuard-туннель к Traefik. |
+| **`07-traefik.md`** | Traefik и CrowdSec: домены, сертификаты, entrypoints, middleware и цепочки, catch-all, метрики. |
+| **`08-amneziawg.md`** | Удалённый доступ в сеть: AmneziaWG (INFRA), обфускация, клиенты, маскарад, порт-форвард на OPNsense. |
+| **`09-xray.md`** | Xray-прокси (INFRA): гео-обход для сервисов (forward-прокси) и прозрачное проксирование телевизоров через REDIRECT. |
+| **`10-authelia.md`** | Authelia и общая модель аутентификации: IdP, forward-auth, OIDC, TOTP/WebAuthn, локальный Redis. |
+| **`11-vaultwarden.md`** | Одноцелевой нативный LXC: Vaultwarden. Тонкие карточки со ссылками на `02-conventions.md` плюс специфика. |
+| **`12-gotify.md`** | Одноцелевой нативный LXC: Gotify. Тонкие карточки со ссылками на `02-conventions.md` плюс специфика. |
+| **`13-dockerhost.md`** | DockerHost VM и Docker-стек: ZFS-датасеты, networking, AppData, контейнеры, Samba. |
+| **`14-monitoring.md`** | Monitoring LXC: Prometheus, Grafana, экспортеры, дашборды, алертинг в Gotify. |
+
 
 ## 4. Глоссарий
 
