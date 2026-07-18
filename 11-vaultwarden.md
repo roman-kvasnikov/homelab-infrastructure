@@ -6,7 +6,7 @@ description: |
 
 # Vaultwarden
 
-Self-hosted менеджер паролей в отдельном непривилегированном LXC (`192.168.50.11`, SERVICES). Работает нативно (без Docker) на бинарнике, извлечённом из официального Docker-образа `vaultwarden/server`. БД — SQLite. Доступ только через Traefik. Версия зафиксирована, обновление вручную через замену бинарника. Базлайн LXC, systemd-sandbox, SSH-hardening, nftables-шаблон и restic-паттерн — см. `conventions.md`.
+Self-hosted менеджер паролей в отдельном непривилегированном LXC (`192.168.50.11`, SERVICES). Работает нативно (без Docker) на бинарнике, извлечённом из официального Docker-образа `vaultwarden/server`. БД — SQLite. Доступ только через Traefik. Версия зафиксирована, обновление вручную через замену бинарника. Базлайн LXC, systemd-sandbox, SSH-hardening, nftables-шаблон и restic-паттерн — см. `02-conventions.md`.
 
 ## 1. Файловая структура
 
@@ -28,7 +28,7 @@ Self-hosted менеджер паролей в отдельном неприви
 
 ## 2. Systemd и конфигурация
 
-Сервис `vaultwarden.service` от системного юзера `vaultwarden` (UID 999), sandbox-набор из `conventions.md`, запись только в `/var/lib/vaultwarden`, `Restart=always`, автозапуск.
+Сервис `vaultwarden.service` от системного юзера `vaultwarden` (UID 999), sandbox-набор из `02-conventions.md`, запись только в `/var/lib/vaultwarden`, `Restart=always`, автозапуск.
 
 Ключевые параметры `/etc/vaultwarden/.env`:
 
@@ -43,13 +43,13 @@ Self-hosted менеджер паролей в отдельном неприви
 
 ## 3. Сетевая фильтрация и публикация
 
-nftables по шаблону сервисного LXC (`conventions.md`): `policy drop`, порт `8000` разрешён только с Traefik (`192.168.40.11`), SSH из MGMT и VPN. Прямой доступ к 8000 мимо Traefik закрыт — соединение не устанавливается.
+nftables по шаблону сервисного LXC (`02-conventions.md`): `policy drop`, порт `8000` разрешён только с Traefik (`192.168.40.11`), SSH из MGMT и VPN. Прямой доступ к 8000 мимо Traefik закрыт — соединение не устанавливается.
 
-В Traefik публикуется как `vaultwarden.kvasok.xyz` под цепочкой **`external-chain-strict`** (CrowdSec + жёсткий rate-limit + security-headers). Жёсткий лимит выбран сознательно — менеджер паролей публичен, и агрессивное ограничение скорости запросов снижает риск перебора. Детали цепочек — см. `ingress-traefik.md`.
+В Traefik публикуется как `vaultwarden.kvasok.xyz` под цепочкой **`chain-external-strict`** (CrowdSec + жёсткий rate-limit + security-headers). Жёсткий лимит выбран сознательно — менеджер паролей публичен, и агрессивное ограничение скорости запросов снижает риск перебора. Детали цепочек — см. `07-traefik.md`.
 
 ## 4. Резервное копирование
 
-Два механизма (см. `backup.md`): **PBS-снапшот всего LXC** ежедневно, и **restic-снапшот данных** через `/usr/local/sbin/vaultwarden-backup.sh` (таймер). Скрипт делает online-снапшот SQLite (`sqlite3 .backup` — атомарная копия работающей БД), затем `restic backup` всей `/var/lib/vaultwarden/data/`, исключая живой `db.sqlite3`, WAL-файлы, `icon_cache/`, `tmp/`. В бэкап попадают `db.sqlite3.backup`, `attachments/`, `rsa_key.pem`. Тег/host `vaultwarden`. Транспорт — rest-server на PBS (`rest:http://vaultwarden:...@192.168.10.15:8000/vaultwarden/`) в append-only, retention централизованно на PBS.
+Два механизма (см. `05-backup.md`): **PBS-снапшот всего LXC** ежедневно, и **restic-снапшот данных** через `/usr/local/sbin/vaultwarden-backup.sh` (таймер). Скрипт делает online-снапшот SQLite (`sqlite3 .backup` — атомарная копия работающей БД), затем `restic backup` всей `/var/lib/vaultwarden/data/`, исключая живой `db.sqlite3`, WAL-файлы, `icon_cache/`, `tmp/`. В бэкап попадают `db.sqlite3.backup`, `attachments/`, `rsa_key.pem`. Тег/host `vaultwarden`. Транспорт — rest-server на PBS (`rest:http://vaultwarden:...@192.168.10.15:8000/vaultwarden/`) в append-only, retention централизованно на PBS.
 
 **Восстановление БД**: после `restic restore` файл лежит как `db.sqlite3.backup` — переименовать в `db.sqlite3` перед запуском. WAL-файлы пересоздадутся при старте.
 
