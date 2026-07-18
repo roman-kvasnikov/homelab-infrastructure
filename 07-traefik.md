@@ -28,7 +28,7 @@ Entrypoint `websecure` (443) принимает PROXY protocol только от
 
 ## 4. Catch-all роутер
 
-В `config.yaml` определён роутер `catch-all` с `priority: 1` и правилом `HostRegexp(.+) || PathPrefix(/)`. Он ловит всё, что не подошло ни под один другой роутер, прогоняет через `crowdsec` и `block-all` (allow-list только `127.0.0.1/32`) и отдаёт `noop@internal`. Практический эффект: любой запрос на неизвестный хост получает 403 — нет утечки на default backend, нет шанса случайно открыть внутренний сервис из-за опечатки в конфиге.
+В `config.yaml` определён роутер `catch-all` с `priority: 1` и правилом `HostRegexp(.+) || PathPrefix(/)`. Он ловит всё, что не подошло ни под один другой роутер, прогоняет через `crowdsec` и `allow-deny-all` (allow-list только `127.0.0.1/32`) и отдаёт `noop@internal`. Практический эффект: любой запрос на неизвестный хост получает 403 — нет утечки на default backend, нет шанса случайно открыть внутренний сервис из-за опечатки в конфиге.
 
 ## 5. Middleware
 
@@ -39,8 +39,10 @@ Entrypoint `websecure` (443) принимает PROXY protocol только от
 | Middleware | Назначение |
 | :--- | :--- |
 | `crowdsec` | плагин CrowdSec (LAPI `127.0.0.1:8080`, mode `stream`, обновление раз в 60 сек, при недоступности LAPI работает с кэшем) |
-| `block-all` | ipAllowList только `127.0.0.1/32` — фактически блок всего |
-| `trusted` | ipAllowList доверенных внутренних сетей (см. 5.4) |
+| `allow-deny-all` | ipAllowList только `127.0.0.1/32` — фактически блок всего |
+| `allow-mgmt-ips` | ipAllowList доверенных админских сетей MGMT и VPN |
+| `allow-trusted-ips` | ipAllowList доверенных внутренних сетей (см. 5.4) |
+| `allow-media-ips` | ipAllowList доверенных внутренних сетей + IOT (см. 5.4) |
 | `security-headers-base` | contentTypeNosniff, forceSTS, includeSubdomains, STS 180 дней, X-Forwarded-Proto=https — базовый набор для любых HTTP-клиентов, включая API |
 | `security-headers-browser` | referrer policy, permissions policy (запрет camera/microphone/geolocation/USB/Bluetooth), CSP (`frame-ancestors 'self'`, `base-uri 'self'`, `form-action 'self'`) — заголовки только для браузерных клиентов |
 | `rate-limit` | average 50, burst 20, period 1s |
