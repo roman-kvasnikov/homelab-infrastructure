@@ -1,5 +1,5 @@
 ---
-name: identity-authelia
+name: authelia
 description: |
   Authelia — IdP и forward-auth провайдер для Traefik. LXC в SERVICES, хранит хеши паролей, TOTP-секреты, WebAuthn-credentials, OIDC-ключи; 2FA через TOTP и WebAuthn, OIDC для приложений. Документ описывает файловую структуру, конфигурацию через env-секреты, локальный Redis, модель forward-auth в Traefik и нюанс с rate-limit. Используй для вопросов по аутентификации, SSO, forward-auth, OIDC, TOTP/WebAuthn.
 ---
@@ -10,7 +10,7 @@ Authelia — Identity Provider и forward-auth прокси для Traefik: ед
 
 Вынесена в отдельный LXC осознанно ради изоляции: Authelia хранит хеши паролей пользователей, TOTP-секреты, WebAuthn-credentials, OIDC client secrets и signing keys. Компрометация Authelia означает компрометацию всех аутентификаций ко всем сервисам, поэтому она не делит контейнер ни с чем.
 
-Работает нативно (без Docker) на бинарнике из официальных GitHub releases. База данных — SQLite. Сессии — локальный Redis в том же LXC. Версия зафиксирована, обновление вручную через замену бинарника. Базлайн LXC (unprivileged + `nesting=1`), systemd-sandbox, SSH-hardening и nftables-шаблон — см. `conventions.md`.
+Работает нативно (без Docker) на бинарнике из официальных GitHub releases. База данных — SQLite. Сессии — локальный Redis в том же LXC. Версия зафиксирована, обновление вручную через замену бинарника. Базлайн LXC (unprivileged + `nesting=1`), systemd-sandbox, SSH-hardening и nftables-шаблон — см. `02-conventions.md`.
 
 ## 1. Файловая структура
 
@@ -46,7 +46,7 @@ Authelia — Identity Provider и forward-auth прокси для Traefik: ед
 
 ## 2. Systemd
 
-Сервис `authelia.service` запускает бинарник от системного юзера `authelia`. Sandbox-набор усиленный (`NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `PrivateUsers`, `ProtectKernel*`, `RestrictNamespaces`, `LockPersonality`, пустой `CapabilityBoundingSet`, `SystemCallFilter=@system-service`) — см. `conventions.md`. Запись разрешена только в `/var/lib/authelia`. `Restart=always`. Зависимость от Redis: `Requires=redis-server.service` + `After=redis-server.service`.
+Сервис `authelia.service` запускает бинарник от системного юзера `authelia`. Sandbox-набор усиленный (`NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `PrivateUsers`, `ProtectKernel*`, `RestrictNamespaces`, `LockPersonality`, пустой `CapabilityBoundingSet`, `SystemCallFilter=@system-service`) — см. `02-conventions.md`. Запись разрешена только в `/var/lib/authelia`. `Restart=always`. Зависимость от Redis: `Requires=redis-server.service` + `After=redis-server.service`.
 
 ExecStart передаёт **семь** конфигурационных файлов через повторяющийся `--config` — Authelia мерджит их в один документ при старте. Это разделяет конфиг по областям и упрощает ревью. Автозапуск при старте контейнера.
 
@@ -75,29 +75,29 @@ Redis установлен в этом же LXC, не разделяется с 
 
 ## 6. Сетевая фильтрация
 
-nftables по шаблону сервисного LXC из `conventions.md`: `policy drop`, разрешён порт Authelia `9091` только с адреса Traefik (`192.168.40.11`), SSH из MGMT и VPN. Прямой доступ к 9091 из других сетей мимо Traefik закрыт (соединение не устанавливается). Redis отдельным правилом не открывается — он слушает только loopback, что покрывается правилом для `lo`.
+nftables по шаблону сервисного LXC из `02-conventions.md`: `policy drop`, разрешён порт Authelia `9091` только с адреса Traefik (`192.168.40.11`), SSH из MGMT и VPN. Прямой доступ к 9091 из других сетей мимо Traefik закрыт (соединение не устанавливается). Redis отдельным правилом не открывается — он слушает только loopback, что покрывается правилом для `lo`.
 
 ## 7. Модель аутентификации и forward-auth
 
 Authelia — основной IdP инфраструктуры. 2FA через TOTP и WebAuthn, поддержка PKCE для мобильных приложений, OIDC для приложений-клиентов. Forward-auth реализован middleware `authelia` в Traefik, указывающим на `http://192.168.50.12:9091/api/authz/forward-auth`.
 
-Защищённый сервис получает цепочку `internal-chain + authelia` или `external-chain + authelia` (см. `ingress-traefik.md`). Запрос проходит через Traefik → forward-auth к Authelia → если сессия не авторизована, редирект на страницу логина Authelia; после успешной аутентификации (и 2FA, если требуется по access-control) запрос пропускается к бэкенду.
+Защищённый сервис получает цепочку `chain-internal + authelia` или `chain-external + authelia` (см. `07-traefik.md`). Запрос проходит через Traefik → forward-auth к Authelia → если сессия не авторизована, редирект на страницу логина Authelia; после успешной аутентификации (и 2FA, если требуется по access-control) запрос пропускается к бэкенду.
 
 ## 8. Нюанс с rate-limit
 
-Authelia **несовместима** с middleware `rate-limit` в Traefik. Её веб-интерфейс — React SPA, который при загрузке подтягивает десятки JS-чанков **параллельно**. Обычный rate-limit (`external-chain`) считает это всплеском запросов и банит клиента на этапе загрузки страницы логина. Поэтому публичный доступ к Authelia идёт через цепочку **без** rate-limit — `external-chain-no-rate-limit` (CrowdSec + security-headers, но без ограничения скорости). Защита от перебора паролей обеспечивается собственным механизмом Authelia (`regulation.yaml` — лимит неудачных логинов), а не Traefik-rate-limit.
+Authelia **несовместима** с middleware `rate-limit` в Traefik. Её веб-интерфейс — React SPA, который при загрузке подтягивает десятки JS-чанков **параллельно**. Обычный rate-limit (`chain-external`) считает это всплеском запросов и банит клиента на этапе загрузки страницы логина. Поэтому публичный доступ к Authelia идёт через цепочку **без** rate-limit — `chain-external-unlimited` (CrowdSec + security-headers, но без ограничения скорости). Защита от перебора паролей обеспечивается собственным механизмом Authelia (`regulation.yaml` — лимит неудачных логинов), а не Traefik-rate-limit.
 
 ## 9. Резервное копирование
 
-Два независимых механизма (по общей схеме, см. `backup.md`):
+Два независимых механизма (по общей схеме, см. `05-backup.md`):
 
 **PBS-снапшот всего LXC** — ежедневно в составе общего pve-задания. Сценарий «снёс LXC, восстановить за минуту».
 
-**Restic-снапшот данных и конфигов** — ежедневно через `/usr/local/sbin/authelia-backup.sh` (таймер `authelia-backup.timer`). Скрипт делает online-снапшот SQLite (`sqlite3 .backup` — консистентная копия работающей БД), затем `restic backup` директорий `/var/lib/authelia/` (БД, `notifier.log`) и `/etc/authelia/` (все YAML, секреты). Исключаются живой `db.sqlite3`, WAL-файлы, `.restic-*`-пароли, `.cache/`. Тег/host `authelia`. Транспорт — rest-server на PBS (`rest:http://authelia:...@192.168.10.15:8000/authelia/`) в append-only. Retention централизованно на PBS (см. `backup.md`).
+**Restic-снапшот данных и конфигов** — ежедневно через `/usr/local/sbin/authelia-backup.sh` (таймер `authelia-backup.timer`). Скрипт делает online-снапшот SQLite (`sqlite3 .backup` — консистентная копия работающей БД), затем `restic backup` директорий `/var/lib/authelia/` (БД, `notifier.log`) и `/etc/authelia/` (все YAML, секреты). Исключаются живой `db.sqlite3`, WAL-файлы, `.restic-*`-пароли, `.cache/`. Тег/host `authelia`. Транспорт — rest-server на PBS (`rest:http://authelia:...@192.168.10.15:8000/authelia/`) в append-only. Retention централизованно на PBS (см. `05-backup.md`).
 
 **Восстановление БД**: после `restic restore` файл лежит как `db.sqlite3.backup` — переименовать в `db.sqlite3` перед запуском. WAL-файлы не нужны, пересоздадутся при старте.
 
-Restic-репозиторий, два пароля (encryption + HTTP basic-auth), режим append-only + private-repos — паттерн общий, см. `conventions.md` и `backup.md`.
+Restic-репозиторий, два пароля (encryption + HTTP basic-auth), режим append-only + private-repos — паттерн общий, см. `02-conventions.md` и `05-backup.md`.
 
 ## 10. Обновление
 
