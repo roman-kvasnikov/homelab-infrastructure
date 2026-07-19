@@ -6,13 +6,13 @@ description: |
 
 # Traefik
 
-Traefik — reverse-proxy для всех сервисов и единственная точка, через которую HTTP-трафик попадает к бэкендам (и снаружи через VPS, и изнутри сети). Развёрнут LXC в сегменте DMZ, `192.168.40.11`. Держит служебный WireGuard-клиент `wg0` к VPS (второй конец туннеля публикации, см. `06-edge-vps.md`), терминирует TLS, применяет middleware и маршрутизирует запросы на бэкенды в SERVICES и других VLAN.
+Traefik — reverse-proxy для всех сервисов и единственная точка, через которую HTTP-трафик попадает к бэкендам (и снаружи через VPS, и изнутри сети). Развёрнут LXC в сегменте DMZ, `192.168.40.11`. Держит служебный WireGuard-клиент `wg0` к VPS (второй конец туннеля публикации, см. `07-edge-vps.md`), терминирует TLS, применяет middleware и маршрутизирует запросы на бэкенды в SERVICES и других VLAN.
 
 DMZ по замыслу содержит только Traefik — все чувствительные сервисы стоят в SERVICES, и Traefik ходит к ним по явным firewall-разрешениям. Базлайн LXC (unprivileged + `nesting=1`) — см. `02-conventions.md`.
 
 ## 1. Домены и сертификаты
 
-Основной домен — `kvasok.xyz`, wildcard `*.kvasok.xyz` публикует self-hosted сервисы. Снаружи `*.kvasok.xyz` указывает на VPS (см. `06-edge-vps.md`); внутри сети Unbound через split-horizon резолвит те же имена в локальный адрес Traefik (`192.168.40.11`).
+Основной домен — `kvasok.xyz`, wildcard `*.kvasok.xyz` публикует self-hosted сервисы. Снаружи `*.kvasok.xyz` указывает на VPS (см. `07-edge-vps.md`); внутри сети Unbound через split-horizon резолвит те же имена в локальный адрес Traefik (`192.168.40.11`).
 
 Сертификаты Let's Encrypt получает **Traefik через DNS-01 challenge** (wildcard `*.kvasok.xyz`). VPS сертификаты не хранит — он работает на L4. TLS-резолвер по умолчанию для `*.kvasok.xyz` — `timewebcloud`; для отдельных хостов есть `namecheap`. DNS-01 через `namecheap` требует обращения к API Namecheap, недоступному напрямую через провайдера, поэтому исходящий трафик Traefik для этого заворачивается через Xray-прокси (см. раздел 8).
 
@@ -36,18 +36,18 @@ Entrypoint `websecure` (443) принимает PROXY protocol только от
 
 ### 5.1. Строительные блоки
 
-| Middleware | Назначение |
-| :--- | :--- |
-| `crowdsec` | плагин CrowdSec (LAPI `127.0.0.1:8080`, mode `stream`, обновление раз в 60 сек, при недоступности LAPI работает с кэшем) |
-| `allow-deny-all` | ipAllowList только `127.0.0.1/32` — фактически блок всего |
-| `allow-mgmt-ips` | ipAllowList: MGMT + VPN — только управляющая сеть (см. 5.4) |
-| `allow-trusted-ips` | ipAllowList: MGMT + TRUSTED + VPN — доверенные пользовательские сети (см. 5.4) |
-| `allow-media-ips` | ipAllowList: MGMT + TRUSTED + IOT + VPN — доверенные плюс телевизоры (см. 5.4) |
-| `headers-common` | contentTypeNosniff, forceSTS, includeSubdomains, STS 180 дней, X-Forwarded-Proto=https — базовый набор для любых HTTP-клиентов, включая API |
-| `headers-browser` | referrer policy, permissions policy (запрет camera/microphone/geolocation/USB/Bluetooth), CSP (`frame-ancestors 'self'`, `base-uri 'self'`, `form-action 'self'`) — заголовки только для браузерных клиентов |
-| `rate-default` | average 50, burst 20, period 1s |
-| `rate-strict` | average 10, burst 5, period 1s |
-| `buffering` | отключение буферизации (лимиты в 0) — для стримов и больших аплоадов |
+| Middleware          | Назначение                                                                                                                                                                                                   |
+| :------------------ | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crowdsec`          | плагин CrowdSec (LAPI `127.0.0.1:8080`, mode `stream`, обновление раз в 60 сек, при недоступности LAPI работает с кэшем)                                                                                     |
+| `allow-deny-all`    | ipAllowList только `127.0.0.1/32` — фактически блок всего                                                                                                                                                    |
+| `allow-mgmt-ips`    | ipAllowList: MGMT + VPN — только управляющая сеть (см. 5.4)                                                                                                                                                  |
+| `allow-trusted-ips` | ipAllowList: MGMT + TRUSTED + VPN — доверенные пользовательские сети (см. 5.4)                                                                                                                               |
+| `allow-media-ips`   | ipAllowList: MGMT + TRUSTED + IOT + VPN — доверенные плюс телевизоры (см. 5.4)                                                                                                                               |
+| `headers-common`    | contentTypeNosniff, forceSTS, includeSubdomains, STS 180 дней, X-Forwarded-Proto=https — базовый набор для любых HTTP-клиентов, включая API                                                                  |
+| `headers-browser`   | referrer policy, permissions policy (запрет camera/microphone/geolocation/USB/Bluetooth), CSP (`frame-ancestors 'self'`, `base-uri 'self'`, `form-action 'self'`) — заголовки только для браузерных клиентов |
+| `rate-default`      | average 50, burst 20, period 1s                                                                                                                                                                              |
+| `rate-strict`       | average 10, burst 5, period 1s                                                                                                                                                                               |
+| `buffering`         | отключение буферизации (лимиты в 0) — для стримов и больших аплоадов                                                                                                                                         |
 
 ### 5.2. Цепочки
 
@@ -95,32 +95,32 @@ chain-external-unlimited:
 
 Отдельно стоит **media-доступ**: `allow-media-ips` (MGMT + TRUSTED + IOT + VPN) добавляет к доверенным сетям IOT — это нужно, чтобы телевизоры (в IOT) дотягивались до Jellyfin, оставаясь при этом отрезанными от прочих internal-сервисов. То есть IOT пускается только к медиа, а не ко всему internal (`chain-internal` его не включает). Это изолирует телевизоры: медиасервер им доступен, админки и остальные внутренние сервисы — нет.
 
-Многие сервисы дополнительно прикрыты Authelia через middleware `authelia` (forwardAuth), обычно как `chain-internal + authelia` или `chain-external + authelia` (см. `10-authelia.md`). Одно осознанное исключение — Gotify, несовместимый с forward-auth (см. `12-gotify.md`).
+Многие сервисы дополнительно прикрыты Authelia через middleware `authelia` (forwardAuth), обычно как `chain-internal + authelia` или `chain-external + authelia` (см. `11-authelia.md`). Одно осознанное исключение — Gotify, несовместимый с forward-auth (см. `13-gotify.md`).
 
 ### 5.4. Уровни доступа (ipAllowList)
 
 Вместо одного списка доверенных сетей — три уровня, по возрастанию охвата. Сервис получает нужный уровень через соответствующую цепочку.
 
 ```yaml
-allow-mgmt-ips:        # chain-admin
-  - 192.168.10.0/24    # MGMT
-  - 10.8.0.0/24        # VPN
+allow-mgmt-ips: # chain-admin
+  - 192.168.10.0/24 # MGMT
+  - 10.8.0.0/24 # VPN
 
-allow-trusted-ips:     # chain-internal
-  - 192.168.10.0/24    # MGMT
-  - 192.168.30.0/24    # TRUSTED
-  - 10.8.0.0/24        # VPN
+allow-trusted-ips: # chain-internal
+  - 192.168.10.0/24 # MGMT
+  - 192.168.30.0/24 # TRUSTED
+  - 10.8.0.0/24 # VPN
 
-allow-media-ips:       # media (Jellyfin)
-  - 192.168.10.0/24    # MGMT
-  - 192.168.30.0/24    # TRUSTED
-  - 192.168.60.0/24    # IOT (телевизоры)
-  - 10.8.0.0/24        # VPN
+allow-media-ips: # media (Jellyfin)
+  - 192.168.10.0/24 # MGMT
+  - 192.168.30.0/24 # TRUSTED
+  - 192.168.60.0/24 # IOT (телевизоры)
+  - 10.8.0.0/24 # VPN
 ```
 
 Градация: `allow-mgmt-ips` — самый узкий (только management + VPN), для админок; `allow-trusted-ips` добавляет TRUSTED (пользовательские устройства), для обычных internal-сервисов; `allow-media-ips` добавляет ещё и IOT, только для медиа. IOT (телевизоры) намеренно есть **только** в media-списке — телевизор дотягивается до Jellyfin, но не до админок и прочих internal-сервисов.
 
-Адресация VPN: во всех трёх списках VPN указан как `10.8.0.0/24`. AmneziaWG работает в routed-модели — NAT на LXC снят, на OPNsense добавлен маршрут `10.8.0.0/24` через `192.168.20.11` (INFRA), поэтому VPN-клиент доходит до Traefik под своим адресом `10.8.0.<N>`, а не под INFRA-адресом. За счёт этого списки на `10.8.0.0/24` работают как задумано, и каждому пиру можно назначать доступ пофайрвольно. Модель адресации VPN — в `08-amneziawg.md`.
+Адресация VPN: во всех трёх списках VPN указан как `10.8.0.0/24`. AmneziaWG работает в routed-модели — NAT на LXC снят, на OPNsense добавлен маршрут `10.8.0.0/24` через `192.168.20.11` (INFRA), поэтому VPN-клиент доходит до Traefik под своим адресом `10.8.0.<N>`, а не под INFRA-адресом. За счёт этого списки на `10.8.0.0/24` работают как задумано, и каждому пиру можно назначать доступ пофайрвольно. Модель адресации VPN — в `09-amneziawg.md`.
 
 ## 6. Доверие к заголовкам
 
@@ -235,19 +235,19 @@ LAPI слушает только `127.0.0.1:8080`. Bouncer в режиме `stre
 
 ### 8.4. Метрики
 
-CrowdSec engine отдаёт Prometheus-метрики на `192.168.40.11:6060` (`prometheus` в `/etc/crowdsec/config.yaml`: `enabled: true`, `level: full`, `listen_addr: 192.168.40.11`, `listen_port: 6060`). Доступ к порту на nftables открыт только Monitoring LXC. Метрики: активные баны по происхождению (свои детекты против community-фида CAPI) и причине, срабатывания сценариев, поток парсинга логов, запросы к LAPI. Скрейпит стек мониторинга (см. `14-monitoring.md`).
+CrowdSec engine отдаёт Prometheus-метрики на `192.168.40.11:6060` (`prometheus` в `/etc/crowdsec/config.yaml`: `enabled: true`, `level: full`, `listen_addr: 192.168.40.11`, `listen_port: 6060`). Доступ к порту на nftables открыт только Monitoring LXC. Метрики: активные баны по происхождению (свои детекты против community-фида CAPI) и причине, срабатывания сценариев, поток парсинга логов, запросы к LAPI. Скрейпит стек мониторинга (см. `15-monitoring.md`).
 
 ## 9. Метрики Traefik
 
-Нативный Prometheus-эндпоинт на отдельном entrypoint `metrics` (`192.168.40.11:8081`). Даёт RPS, коды ответов по классам, латентность p95 по сервисам, трафик. Доступ к порту открыт только Monitoring LXC (nftables). Дашборд Traefik — см. `14-monitoring.md`.
+Нативный Prometheus-эндпоинт на отдельном entrypoint `metrics` (`192.168.40.11:8081`). Даёт RPS, коды ответов по классам, латентность p95 по сервисам, трафик. Доступ к порту открыт только Monitoring LXC (nftables). Дашборд Traefik — см. `15-monitoring.md`.
 
 ## 10. Резервное копирование
 
-Только PBS-снапшот всего LXC в составе общего ежедневного pve-задания. Отдельный restic не заводится — критичного point-in-time состояния у Traefik нет; конфиги (`/etc/traefik/`, `/etc/nftables.conf`, `/etc/wireguard/wg0.conf`) маленькие, статичные и восстанавливаются вместе с LXC из PBS. См. `05-backup.md`.
+Только PBS-снапшот всего LXC в составе общего ежедневного pve-задания. Отдельный restic не заводится — критичного point-in-time состояния у Traefik нет; конфиги (`/etc/traefik/`, `/etc/nftables.conf`, `/etc/wireguard/wg0.conf`) маленькие, статичные и восстанавливаются вместе с LXC из PBS. См. `06-backup.md`.
 
 ## 11. Зависимости
 
-- **VPS (`06-edge-vps.md`)** — второй конец wg0-туннеля, источник публичного трафика с PROXY protocol.
+- **VPS (`07-edge-vps.md`)** — второй конец wg0-туннеля, источник публичного трафика с PROXY protocol.
 - **Unbound на OPNsense** — split-horizon `*.kvasok.xyz → 192.168.40.11`, DNS для DNS-01 ACME.
 - **Бэкенды в SERVICES** — Vaultwarden, Authelia, Gotify, Monitoring, DockerHost — цели проксирования (доступ по явным firewall-разрешениям).
 - **Monitoring LXC (`192.168.50.21`)** — скрейпит метрики Traefik (8081) и CrowdSec (6060).

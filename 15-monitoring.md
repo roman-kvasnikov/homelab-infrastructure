@@ -44,7 +44,7 @@ Grafana опубликована через Traefik как `grafana.kvasok.xyz` 
 - **prometheus** — сам себя (`127.0.0.1:9090`).
 - **node** — `node_exporter` (`9100`) на пяти хостах с метками `instance`: `monitoring` (`127.0.0.1`), `pve-mini` (`192.168.10.11`), `pve` (`192.168.10.12`), `pbs` (`192.168.10.15`), `dockerhost` (`192.168.50.30`).
 - **pve** и **pve-mini** — через локальный `proxmox-pve-exporter` (`127.0.0.1:9221`, `metrics_path=/pve`, модули `pve`/`pve-mini`), реальные цели опроса — `192.168.10.12` и `192.168.10.11`.
-- **pbs** — локальный `pbs-exporter` (`127.0.0.1:10019`, `scrape_interval=60s`), опрашивает API PBS read-only токеном `monitoring@pbs!pbs-exporter` (роль `Audit`, см. `05-backup.md`).
+- **pbs** — локальный `pbs-exporter` (`127.0.0.1:10019`, `scrape_interval=60s`), опрашивает API PBS read-only токеном `monitoring@pbs!pbs-exporter` (роль `Audit`, см. `06-backup.md`).
 - **blackbox-http** — локальный `blackbox_exporter` (`127.0.0.1:9115`, модуль `http_2xx`, `60s`): пробы доступности `vaultwarden`, `authelia`, `anchor`, `plumio`, `filebrowser`, `immich`, `linkwarden` (`*.kvasok.xyz`).
 - **crowdsec** — `192.168.40.11:6060` (`30s`).
 - **traefik** — `192.168.40.11:8081` (`30s`).
@@ -61,7 +61,7 @@ Grafana unified alerting, вся конфигурация — как код в `
 
 ## 7. Резервное копирование
 
-Только PBS-снапшот всего LXC в составе общего pve-задания (см. `05-backup.md`). Отдельный restic не заводится: метрики Prometheus (TSDB) эфемерны и восстановимы, а критичное состояние Grafana невелико и покрыто снапшотом — data source и алертинг и так лежат кодом в `/etc/grafana/provisioning/`, дашборды из БД восстанавливаются вместе с LXC.
+Только PBS-снапшот всего LXC в составе общего pve-задания (см. `06-backup.md`). Отдельный restic не заводится: метрики Prometheus (TSDB) эфемерны и восстановимы, а критичное состояние Grafana невелико и покрыто снапшотом — data source и алертинг и так лежат кодом в `/etc/grafana/provisioning/`, дашборды из БД восстанавливаются вместе с LXC.
 
 ## 8. Зависимости
 

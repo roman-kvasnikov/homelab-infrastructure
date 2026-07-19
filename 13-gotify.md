@@ -24,15 +24,15 @@ nftables по шаблону сервисного LXC (`02-conventions.md`): `po
 
 ## 3. Публикация и авторизация
 
-Gotify опубликован через Traefik как `gotify.kvasok.xyz` под цепочкой `chain-external` (CrowdSec + rate-limit + security-headers), **без** middleware `authelia`. Это сознательное исключение из общего правила (обычно сервисы прикрыты Authelia): forward-auth Authelia несовместим с родной моделью авторизации Gotify. Gotify использует собственную авторизацию (логин/пароль для UI и приложений, токен приложения для отправки сообщений) и Basic Auth для ряда эндпоинтов; при включённом forward-auth запросы к `/manifest.json` и API заворачиваются на страницу логина Authelia до срабатывания родной авторизации Gotify, и клиент не может аутентифицироваться. Поэтому Gotify выведен из-под Authelia и защищён только собственной авторизацией. Детали цепочек — см. `07-traefik.md`.
+Gotify опубликован через Traefik как `gotify.kvasok.xyz` под цепочкой `chain-external` (CrowdSec + rate-limit + security-headers), **без** middleware `authelia`. Это сознательное исключение из общего правила (обычно сервисы прикрыты Authelia): forward-auth Authelia несовместим с родной моделью авторизации Gotify. Gotify использует собственную авторизацию (логин/пароль для UI и приложений, токен приложения для отправки сообщений) и Basic Auth для ряда эндпоинтов; при включённом forward-auth запросы к `/manifest.json` и API заворачиваются на страницу логина Authelia до срабатывания родной авторизации Gotify, и клиент не может аутентифицироваться. Поэтому Gotify выведен из-под Authelia и защищён только собственной авторизацией. Детали цепочек — см. `08-traefik.md`.
 
 ## 4. Приложение grafana-alerts
 
-Для алертинга Grafana в Gotify заведено отдельное приложение `grafana-alerts` со своим токеном. Grafana шлёт уведомления о срабатывании правил через webhook на Gotify API (`https://gotify.kvasok.xyz/message?token=<токен>`), путь Grafana → Traefik → Gotify. Токен хранится в provisioning-конфиге контакта на стороне Grafana; в Gotify это обычное приложение-источник. Детали алертинга — см. `14-monitoring.md`.
+Для алертинга Grafana в Gotify заведено отдельное приложение `grafana-alerts` со своим токеном. Grafana шлёт уведомления о срабатывании правил через webhook на Gotify API (`https://gotify.kvasok.xyz/message?token=<токен>`), путь Grafana → Traefik → Gotify. Токен хранится в provisioning-конфиге контакта на стороне Grafana; в Gotify это обычное приложение-источник. Детали алертинга — см. `15-monitoring.md`.
 
 ## 5. Резервное копирование
 
-Только PBS-снапшот всего LXC в составе общего pve-задания. Отдельный restic не заводится: критичного point-in-time состояния, ради которого нужен гранулярный restic (как БД паролей у Vaultwarden или TOTP/OIDC у Authelia), у Gotify нет — SQLite с подписками и историей сообщений некритична, а file-level restore одного файла из CT-снапшота PBS при необходимости доступен. См. `05-backup.md`.
+Только PBS-снапшот всего LXC в составе общего pve-задания. Отдельный restic не заводится: критичного point-in-time состояния, ради которого нужен гранулярный restic (как БД паролей у Vaultwarden или TOTP/OIDC у Authelia), у Gotify нет — SQLite с подписками и историей сообщений некритична, а file-level restore одного файла из CT-снапшота PBS при необходимости доступен. См. `06-backup.md`.
 
 ## 6. Зависимости
 
