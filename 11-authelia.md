@@ -81,7 +81,9 @@ nftables по шаблону сервисного LXC из `02-conventions.md`: 
 
 Authelia — основной IdP инфраструктуры. 2FA через TOTP и WebAuthn, поддержка PKCE для мобильных приложений, OIDC для приложений-клиентов. Forward-auth реализован middleware `authelia` в Traefik, указывающим на `http://192.168.50.12:9091/api/authz/forward-auth`.
 
-Защищённый сервис получает цепочку `chain-internal + authelia` или `chain-external + authelia` (см. `07-traefik.md`). Запрос проходит через Traefik → forward-auth к Authelia → если сессия не авторизована, редирект на страницу логина Authelia; после успешной аутентификации (и 2FA, если требуется по access-control) запрос пропускается к бэкенду.
+Защищённый сервис получает одну из цепочек с добавленным middleware `authelia`: `chain-admin + authelia` для админок инфраструктуры (Proxmox, PBS, OPNsense, Omada, Grafana, Prometheus, Traefik dashboard и др.), `chain-internal + authelia` для внутренних пользовательских сервисов, `chain-external + authelia` для публичных (см. `08-traefik.md`). Для админок это даёт два независимых барьера: сетевое ограничение `allow-mgmt-ips` (MGMT + VPN) от цепочки и forward-auth со вторым фактором от Authelia — сеть отсекает всё вне управляющих сегментов, Authelia требует TOTP/WebAuthn у того, кто в них попал.
+
+Запрос проходит через Traefik → forward-auth к Authelia → если сессия не авторизована, редирект на страницу логина Authelia; после успешной аутентификации (и 2FA, если требуется по access-control) запрос пропускается к бэкенду.
 
 ## 8. Нюанс с rate-limit
 
