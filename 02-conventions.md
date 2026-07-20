@@ -176,6 +176,8 @@ ClientAliveCountMax 2
 - `X11Forwarding no` — на headless-узлах не нужен.
 - `AllowAgentForwarding no` — закрыт типичный путь lateral movement через ssh-agent.
 - `AllowTcpForwarding no` — узел нельзя использовать как туннельный прокси через `ssh -L`.
+- `ClientAliveInterval 300` - если клиент не отвечает на сообщение keepalive в течение заданного интервала, сервер считает, что клиент больше недоступен.
+- `ClientAliveCountMax 2` - определяет количество keepalive-сообщений, которые могут быть отправлены клиенту без получения ответа, прежде чем сервер завершит соединение.
 
 Аутентификация — по ed25519-ключам. Доступ к SSH ограничен на уровне nftables (MGMT + VPN, см. раздел 2). Защита от brute-force — коллекция CrowdSec `crowdsecurity/sshd` на Traefik LXC.
 
