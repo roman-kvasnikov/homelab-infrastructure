@@ -166,6 +166,8 @@ KbdInteractiveAuthentication no
 X11Forwarding no
 AllowAgentForwarding no
 AllowTcpForwarding no
+ClientAliveInterval 300
+ClientAliveCountMax 2
 ```
 
 - `PermitRootLogin prohibit-password` — root только по ключу, не по паролю.
