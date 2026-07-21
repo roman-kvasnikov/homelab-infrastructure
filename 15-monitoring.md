@@ -33,7 +33,7 @@ Prometheus скрейпит цели в других сегментах: `node_e
 
 ## 3. Публикация и авторизация
 
-Grafana опубликована через Traefik как `grafana.kvasok.xyz` (`root_url = https://grafana.kvasok.xyz/`, `http_addr` пуст → слушает `0.0.0.0:3000`) под цепочкой `chain-admin` плюс middleware `authelia`: сетевое ограничение `allow-mgmt-ips` (MGMT + VPN) и security-headers, поверх которых forward-auth Authelia (TOTP/WebAuthn) требует второй фактор (см. `08-traefik.md`, `12-authelia.md`). Prometheus UI (`9090`) фронтится Traefik под той же связкой `chain-admin` + `authelia` (порт `9090` на nftables открыт только с Traefik).
+Grafana опубликована через Traefik как `grafana.kvasok.xyz` (`root_url = https://grafana.kvasok.xyz/`, `http_addr` пуст → слушает `0.0.0.0:3000`) под цепочкой `chain-admin` плюс middleware `authelia`: сетевое ограничение `allow-mgmt-ips` (MGMT + VPN) и security-headers, поверх которых forward-auth Authelia (TOTP/WebAuthn) требует второй фактор (см. `08-traefik.md`, `11-authelia.md`). Prometheus UI (`9090`) фронтится Traefik под той же связкой `chain-admin` + `authelia` (порт `9090` на nftables открыт только с Traefik).
 
 Аутентификация Grafana — собственная, локальные пользователи (логин/пароль); внешние провайдеры (OIDC/`generic_oauth`, `auth.proxy`) и анонимный доступ выключены. У Prometheus UI своей аутентификации нет, поэтому единственный фактор доступа к нему — Authelia перед Traefik. Итоговая модель защиты админок мониторинга: сетевое ограничение до MGMT + VPN, forward-auth Authelia со вторым фактором и — для Grafana — собственный локальный вход.
 
