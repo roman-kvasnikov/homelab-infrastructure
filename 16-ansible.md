@@ -23,7 +23,8 @@ inventories/
       tcp_forwarding.yml   # Match-исключение AllowTcpForwarding
     host_vars/
       amneziawg.yml  authelia.yml  entrypoint.yml  gotify.yml
-      monitoring.yml  omada.yml  traefik.yml  vaultwarden.yml
+      monitoring.yml  omada.yml  pbs.yml  pve.yml  pve-mini.yml
+      traefik.yml  vaultwarden.yml
 playbooks/
   update.yml               # apt update/upgrade + отчёт, без перезагрузки
   homelab/
@@ -74,13 +75,13 @@ roles/
 | :--- | :--- | :--- |
 | `homelab` | `vps` + `proxmox` + `lxc` + `vm` | все управляемые хосты одним именем |
 | `ssh_hardening_managed` | `proxmox` + `lxc` + `vm` | цель роли `ssh-hardening`; `vps` исключён |
-| `nftables_managed` | `lxc` + `vm` | цель роли `nftables` |
+| `nftables_managed` | `proxmox` + `lxc` + `vm` | цель роли `nftables`; `vps` исключён (держит свой firewall) |
 | `tcp_forwarding` | `traefik`, `ansible`, `dockerhost`, `dev` | точечное разрешение TCP-forwarding через SSH-Match |
 | `on_pve` / `on_pve_mini` | по хосту размещения | справочные группы физического расположения |
 
 ### group_vars
 
-`all.yml` задаёт общие параметры подключения (`ansible_user: root`, `ansible_python_interpreter`) и — главное — словарь `nft_defines`: единый набор имя→адрес (VLAN-сети, служебные IP сервисов, `VPS_WG`, `VPN_NET`, `TPLINK_SWITCH_IP`), из которого роль `nftables` генерирует блок `define` в ruleset каждого хоста. Это единственный источник адресов для всех firewall-правил, поэтому смена адреса правится в одном месте.
+`all.yml` задаёт общие параметры подключения (`ansible_user: root`, `ansible_python_interpreter`) и — главное — словарь `nft_defines`: единый набор имя→адрес (VLAN-сети, служебные IP сервисов, `PVE_MINI_IP`, `PVE_IP`, `PBS_IP`, `VPS_WG`, `VPN_NET`, `TPLINK_SWITCH_IP`), из которого роль `nftables` генерирует блок `define` в ruleset каждого хоста. Это единственный источник адресов для всех firewall-правил, поэтому смена адреса правится в одном месте.
 
 `vm.yml` переопределяет доступ для группы `vm`: подключение под `romank` с `become` и `ssh_extra_directives: [AllowUsers romank]`, которая добавляется в SSH-baseline этих хостов.
 
@@ -88,10 +89,13 @@ roles/
 
 ### host_vars
 
-Файлы host_vars хранят специфику узла. Для большинства это `nft_service_rules` — порты сервиса и разрешённые источники сверх SSH; у маршрутизирующего `amneziawg` дополнительно `nft_forward_rules`; у `entrypoint` — только параметры подключения (порт, пользователь, `become`, отключённый pipelining). Хосты без host_vars получают дефолтный ruleset: SSH из MGMT и VPN, всё остальное — drop.
+Файлы host_vars хранят специфику узла. Для большинства это `nft_service_rules` — порты сервиса и разрешённые источники сверх SSH; у маршрутизирующего `amneziawg` дополнительно `nft_forward_rules`; у гипервизоров `pve-mini` и `pve` — `nft_forward_policy: accept`, потому что через их мосты проходит bridged-трафик гостей (в том числе весь трафик OPNsense на PVE-Mini), который нельзя ронять host-политикой `forward`; у `entrypoint` — только параметры подключения (порт, пользователь, `become`, отключённый pipelining). Хосты без host_vars получают дефолтный ruleset: SSH из MGMT и VPN, всё остальное — drop.
 
 | Хост | Разрешённые входящие (сверх SSH) |
 | :--- | :--- |
+| `pve-mini` | `8006` из MGMT, VPN, Traefik, Monitoring (pve-exporter); `9100` от Monitoring; `forward` — `accept` |
+| `pve` | `8006` из MGMT, VPN, Traefik, Monitoring (pve-exporter); `3493` (NUT) от вторичных клиентов (PVE-Mini, DockerHost); `9100` от Monitoring; `forward` — `accept` |
+| `pbs` | `8007` из MGMT, VPN, Traefik (публикация UI), Monitoring (pbs-exporter), DockerHost (Homepage); `8000` (rest-server) только от restic-клиентов (Vaultwarden, Authelia, DockerHost); `9100` (метрики) от Monitoring |
 | `traefik` | `443` из внутренних VLAN (eth0); `443` из VPS через `wg0` (PROXY protocol); `8079` от DockerHost; `8081` и `6060` (метрики) от Monitoring |
 | `vaultwarden` | `8000` только от Traefik |
 | `authelia` | `9091` только от Traefik |
