@@ -67,7 +67,7 @@ description: |
 | **`13-gotify.md`** | Одноцелевой нативный LXC: Gotify. Тонкие карточки со ссылками на `02-conventions.md` плюс специфика. |
 | **`14-dockerhost.md`** | DockerHost VM и Docker-стек: ZFS-датасеты, networking, AppData, контейнеры, Samba. |
 | **`15-monitoring.md`** | Monitoring LXC: Prometheus, Grafana, экспортеры, дашборды, алертинг в Gotify. |
-
+| **`16-ansible.md`** | Ansible LXC: декларативное управление конфигурацией nftables и ssh с одной control node. |
 
 ## 4. Глоссарий
 
