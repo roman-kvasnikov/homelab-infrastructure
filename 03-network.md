@@ -27,7 +27,7 @@ description: |
 | 20   | **INFRA**    | `192.168.20.0/24` | AmneziaWG, Xray                                                                           |
 | 30   | **TRUSTED**  | `192.168.30.0/24` | Ноутбуки, ПК, телефоны, доверенные устройства                                             |
 | 40   | **DMZ**      | `192.168.40.0/24` | Traefik — точка входа публичных сервисов                                                  |
-| 50   | **SERVICES** | `192.168.50.0/24` | Vaultwarden, Authelia, DockerHost VM, прочие сервисы                                      |
+| 50   | **SERVICES** | `192.168.50.0/24` | Vaultwarden, Authelia, Monitoring, Gotify, PostgreSQL, медиастек, Immich, Frigate, Shares, Organizer, DockerHost VM |
 | 60   | **IOT**      | `192.168.60.0/24` | Телевизоры, бытовая техника, умный дом                                                    |
 | 70   | **CCTV**     | `192.168.70.0/24` | IP-камеры                                                                                 |
 | 80   | **GUEST**    | `192.168.80.0/24` | Гостевой Wi-Fi                                                                            |
@@ -59,6 +59,7 @@ description: |
 | `192.168.20.1`  | OPNsense (шлюз) |
 | `192.168.20.11` | AmneziaWG       |
 | `192.168.20.12` | Xray            |
+| `192.168.20.20` | Homepage        |
 
 ### 3.3. DMZ (VLAN 40)
 
@@ -77,10 +78,18 @@ description: |
 | `192.168.50.21` | Monitoring        |
 | `192.168.50.22` | Gotify            |
 | `192.168.50.30` | DockerHost VM     |
+| `192.168.50.31` | Jellyfin          |
+| `192.168.50.32` | Arr (Prowlarr / Sonarr / Radarr) |
+| `192.168.50.33` | qBittorrent       |
+| `192.168.50.34` | Organizer         |
+| `192.168.50.35` | Immich            |
+| `192.168.50.36` | Shares (Samba / FileBrowser) |
+| `192.168.50.37` | Frigate           |
 | `192.168.50.40` | DEV VM            |
 | `192.168.50.50` | Be-Free.Online VM |
+| `192.168.50.90` | PostgreSQL        |
 
-DockerHost несёт основной стек сервисов в Docker (медиасервер, фотоархив, управление загрузками, мониторинг камер и др.) и использует проброшенный Intel iGPU для аппаратного транскодинга.
+Прикладной стек вынесен в отдельные LXC: медиасервер (Jellyfin), управление загрузками (Prowlarr/Sonarr/Radarr, qBittorrent), фотоархив (Immich), мониторинг камер (Frigate), файловый доступ (Samba + FileBrowser), заметки и утилиты (Organizer), общий PostgreSQL. Медиа-LXC и Immich используют iGPU хоста PVE (`05-proxmox.md`). DockerHost VM несёт остаточные Docker-сервисы, ещё не перенесённые в LXC.
 
 ## 4. Гипервизоры и WAN
 
