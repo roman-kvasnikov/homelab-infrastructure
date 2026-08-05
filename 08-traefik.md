@@ -91,7 +91,7 @@ chain-external-unlimited:
 
 ### 5.3. Назначение цепочек
 
-`chain-admin` — только управляющая сеть (MGMT + VPN). Применяется к админ-интерфейсам инфраструктуры: Traefik dashboard, Proxmox UI, Omada, OPNsense, Portainer, pgAdmin — доступ к ним только из management, даже TRUSTED не пускается. `chain-internal` — доверенные пользовательские сети (MGMT + TRUSTED + VPN). Для внутренних сервисов, к которым ходят обычные устройства пользователя. `chain-external` — публичные сервисы с обычным rate-limit. `chain-external-strict` — где нужен жёсткий лимит (Vaultwarden). `chain-external-unlimited` — где лимит мешает (Immich: листание галереи даёт множество параллельных запросов, при обычном лимите пользователя банит; Authelia: React SPA грузит десятки JS-чанков параллельно).
+`chain-admin` — только управляющая сеть (MGMT + VPN). Применяется к админ-интерфейсам инфраструктуры: Traefik dashboard, Proxmox UI, Omada, OPNsense, pgAdmin — доступ к ним только из management, даже TRUSTED не пускается. `chain-internal` — доверенные пользовательские сети (MGMT + TRUSTED + VPN). Для внутренних сервисов, к которым ходят обычные устройства пользователя. `chain-external` — публичные сервисы с обычным rate-limit. `chain-external-strict` — где нужен жёсткий лимит (Vaultwarden). `chain-external-unlimited` — где лимит мешает (Immich: листание галереи даёт множество параллельных запросов, при обычном лимите пользователя банит; Authelia: React SPA грузит десятки JS-чанков параллельно).
 
 Отдельно стоит **media-доступ**: `allow-media-ips` (MGMT + TRUSTED + IOT + VPN) добавляет к доверенным сетям IOT — это нужно, чтобы телевизоры (в IOT) дотягивались до Jellyfin, оставаясь при этом отрезанными от прочих internal-сервисов. То есть IOT пускается только к медиа, а не ко всему internal (`chain-internal` его не включает). Это изолирует телевизоры: медиасервер им доступен, админки и остальные внутренние сервисы — нет.
 
@@ -130,7 +130,7 @@ allow-media-ips: # media (Jellyfin)
 
 Traefik — точка входа всего HTTP-трафика, поэтому фильтрация консервативна: whitelist с `policy drop`. В отличие от типовых сервисных LXC (см. `02-conventions.md`), у Traefik nftables специфичен — он терминирует туннель к VPS, принимает 443 из внутренних VLAN и отдаёт метрики Monitoring. Используется одна таблица `inet filter`; NAT на Traefik нет — в routed-модели VPN-трафик доходит под своим адресом `10.8.0.0/24`.
 
-Что разрешено во входящих: loopback и conntrack established/related; базовые ICMP; SSH (22) из MGMT и VPN; HTTPS (443) на `eth0` из внутренних доверенных VLAN (через split-horizon клиенты идут на `192.168.40.11`); HTTPS (443) на `wg0` от VPS (`10.0.0.1`, публичный трафик с PROXY protocol) и VPN-подсети; внутренний Traefik API (8079) только с DockerHost (виджет Homepage); метрики Traefik (8081) и CrowdSec (6060) только с Monitoring LXC (`192.168.50.21`).
+Что разрешено во входящих: loopback и conntrack established/related; базовые ICMP; SSH (22) из MGMT и VPN; HTTPS (443) на `eth0` из внутренних доверенных VLAN (через split-horizon клиенты идут на `192.168.40.11`); HTTPS (443) на `wg0` от VPS (`10.0.0.1`, публичный трафик с PROXY protocol) и VPN-подсети; внутренний Traefik API (8079) только с Homepage (`192.168.20.20`, виджет дашборда); метрики Traefik (8081) и CrowdSec (6060) только с Monitoring LXC (`192.168.50.21`).
 
 ```nft
 #!/usr/sbin/nft -f
@@ -147,7 +147,7 @@ define IOT_NET       = 192.168.60.0/24
 define VPN_NET       = 10.8.0.0/24
 
 define MONITORING_IP = 192.168.50.21
-define DOCKERHOST_IP = 192.168.50.30
+define HOMEPAGE_IP   = 192.168.20.20
 
 table inet filter {
     chain input {
@@ -191,8 +191,8 @@ table inet filter {
         # HTTPS through wg0 from VPS (10.0.0.1) - public traffic with PROXY-protocol
         iifname "wg0" tcp dport 443 ip saddr $VPS_WG accept
 
-        # Internal Traefik API - only with DockerHost (Homepage)
-        iifname "eth0" tcp dport 8079 ip saddr $DOCKERHOST_IP accept
+        # Internal Traefik API - only from Homepage
+        iifname "eth0" tcp dport 8079 ip saddr $HOMEPAGE_IP accept
 
         # Prometheus metrics for Traefik - Monitoring (Prometheus)
         iifname "eth0" tcp dport 8081 ip saddr $MONITORING_IP accept
@@ -243,13 +243,13 @@ CrowdSec engine отдаёт Prometheus-метрики на `192.168.40.11:6060`
 
 ## 10. Резервное копирование
 
-Только PBS-снапшот всего LXC в составе общего ежедневного pve-задания. Отдельный restic не заводится — критичного point-in-time состояния у Traefik нет; конфиги (`/etc/traefik/`, `/etc/nftables.conf`, `/etc/wireguard/wg0.conf`) маленькие, статичные и восстанавливаются вместе с LXC из PBS. См. `06-backup.md`.
+Только PBS-снапшот всего LXC в составе общего ежедневного pve-задания. Критичного point-in-time состояния у Traefik нет; конфиги (`/etc/traefik/`, `/etc/nftables.conf`, `/etc/wireguard/wg0.conf`) маленькие, статичные и восстанавливаются вместе с LXC из PBS. См. `06-backup.md`.
 
 ## 11. Зависимости
 
 - **VPS (`07-edge-vps.md`)** — второй конец wg0-туннеля, источник публичного трафика с PROXY protocol.
 - **Unbound на OPNsense** — split-horizon `*.kvasok.xyz → 192.168.40.11`, DNS для DNS-01 ACME.
-- **Бэкенды в SERVICES** — Vaultwarden, Authelia, Gotify, Monitoring, DockerHost — цели проксирования (доступ по явным firewall-разрешениям).
+- **Бэкенды в SERVICES** — Vaultwarden, Authelia, Gotify, Monitoring, медиастек, Immich, Frigate, Shares/FileBrowser, OnlyOffice и прочие сервисы — цели проксирования (доступ по явным firewall-разрешениям).
 - **Monitoring LXC (`192.168.50.21`)** — скрейпит метрики Traefik (8081) и CrowdSec (6060).
 - **Xray (`192.168.20.12`)** — HTTP-прокси для исходящего трафика Traefik (скачивание плагина CrowdSec с `plugins.traefik.io`, выпуск сертификатов через `namecheap`) и CrowdSec engine (CAPI-синхронизация), через `HTTP_PROXY`/`HTTPS_PROXY` в `traefik.service` и `crowdsec.service`.
 - **PBS (`192.168.10.15`)** — снапшоты LXC.

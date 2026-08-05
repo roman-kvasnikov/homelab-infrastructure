@@ -51,19 +51,30 @@ description: |
 
 ### Гости
 
-| CTID | Гость          | Тип | Сегмент       | Адрес           |
-| :--- | :------------- | :-- | :------------ | :-------------- |
-| 411  | Traefik        | LXC | DMZ (40)      | `192.168.40.11` |
-| 511  | Vaultwarden    | LXC | SERVICES (50) | `192.168.50.11` |
-| 512  | Authelia       | LXC | SERVICES (50) | `192.168.50.12` |
-| 521  | Monitoring     | LXC | SERVICES (50) | `192.168.50.21` |
-| 522  | Gotify         | LXC | SERVICES (50) | `192.168.50.22` |
+| CTID/VMID | Гость          | Тип | Сегмент       | Адрес           |
+| :-------- | :------------- | :-- | :------------ | :-------------- |
 | 199  | Ansible        | LXC | MGMT (10)     | `192.168.10.99` |
-| 530  | DockerHost     | VM  | SERVICES (50) | `192.168.50.30` |
-| 540  | Dev            | VM  | SERVICES (50) | `192.168.50.40` |
-| 550  | Be-Free.Online | VM  | SERVICES (50) | `192.168.50.50` |
+| 220  | Homepage       | LXC | INFRA (20)    | `192.168.20.20` |
+| 115  | Traefik        | LXC | DMZ (40)      | `192.168.40.11` |
+| 117  | Vaultwarden    | LXC | SERVICES (50) | `192.168.50.11` |
+| 118  | Authelia       | LXC | SERVICES (50) | `192.168.50.12` |
+| 119  | Monitoring     | LXC | SERVICES (50) | `192.168.50.21` |
+| 116  | Gotify         | LXC | SERVICES (50) | `192.168.50.22` |
+| 531  | Jellyfin       | LXC | SERVICES (50) | `192.168.50.31` |
+| 532  | Arr            | LXC | SERVICES (50) | `192.168.50.32` |
+| 533  | qBittorrent    | LXC | SERVICES (50) | `192.168.50.33` |
+| 534  | Organizer      | LXC | SERVICES (50) | `192.168.50.34` |
+| 535  | Immich         | LXC | SERVICES (50) | `192.168.50.35` |
+| 536  | Shares         | LXC | SERVICES (50) | `192.168.50.36` |
+| 537  | Frigate        | LXC | SERVICES (50) | `192.168.50.37` |
+| 538  | OnlyOffice     | LXC | SERVICES (50) | `192.168.50.38` |
+| 580  | YandexDisk     | LXC | SERVICES (50) | `192.168.50.80` |
+| 590  | PostgreSQL     | LXC | SERVICES (50) | `192.168.50.90` |
+| 120  | DockerHost     | VM  | SERVICES (50) | `192.168.50.30` |
+| 140  | Dev            | VM  | SERVICES (50) | `192.168.50.40` |
+| 150  | Be-Free.Online | VM  | SERVICES (50) | `192.168.50.50` |
 
-CTID кодирует VLAN: первая цифра — номер сегмента (`4xx` — DMZ, `5xx` — SERVICES), остальные — хостовая часть адреса. Детали каждого сервиса — в соответствующих документах (`08-traefik.md`, `11-authelia.md`, `12-vaultwarden.md`, `13-gotify.md`, `14-dockerhost.md`, `15-monitoring.md`).
+Детали каждого сервиса — в соответствующих документах (`08-traefik.md`, `11-authelia.md`, `12-vaultwarden.md`, `13-gotify.md`, `14-dockerhost.md`, `15-monitoring.md`, `17-media-stack.md`).
 
 ---
 
@@ -75,53 +86,67 @@ CTID кодирует VLAN: первая цифра — номер сегмен�
 | :-------- | :------ | :------------------- | :---------------------------------- |
 | `local`   | dir     | SATA SSD, `pve-root` | ISO, шаблоны LXC, vzdump-дампы      |
 | `zguests` | zfspool | NVMe                 | Виртуальные диски всех VM/LXC       |
-| `pbs`     | pbs     | PBS `192.168.10.15`  | Бэкап-цель для VM/LXC и host backup |
+| `zdata`   | zfspool | RAIDZ1 (4× HDD)      | Managed-volume данных сервисов      |
+| `zssd`    | zfspool | SATA SSD             | Резервный SSD-пул                   |
+| `pbs-main`| pbs     | PBS `192.168.10.15`  | Бэкап-цель для VM/LXC и host backup |
 
-Дисковая структура:
+Пять ZFS-пулов, каждый монтируется в корень по своему имени.
 
 ```
-SATA SSD:
+SATA SSD (система):
 ├── EFI boot partition
 ├── pve-swap
 └── pve-root  → /, и /var/lib/vz (storage `local`)
 
+SATA SSD (резерв):
+└── zssd → /zssd (ZFS pool, lz4, atime=off)
+
 NVMe:
-└── zguests (ZFS pool, lz4, ashift=12, volblocksize=16k)
-    ├── system-диски всех LXC (Traefik, Vaultwarden, Authelia, Monitoring, Gotify, Ansible)
+└── zguests → /zguests (ZFS pool, lz4, ashift=12)
+    ├── system-диски (rootfs) всех LXC
     └── system-диски VM (DockerHost, Dev, Be-Free.Online)
+
+HDD:
+├── zdata → /zdata (RAIDZ1, 4 диска, lz4) — managed-volume данных сервисов
+├── zmedia → /zmedia (одиночный диск) — медиатека
+└── zfrigate → /zfrigate (одиночный диск) — записи камер
 ```
 
-Пул `zguests` создан с параметрами `compression=lz4`, `atime=off`, `xattr=sa`, `acltype=posixacl`. **ZFS ARC ограничен 4 GB** (`/etc/modprobe.d/zfs.conf`: `options zfs zfs_arc_max=4294967296`), чтобы не отъедать память у DockerHost VM. Остальная RAM остаётся доступной гостям.
+Пулы созданы с `compression=lz4` (кроме `zmedia`, где сжатие отключено — медиафайлы уже сжаты) и `atime=off`. **ZFS ARC ограничен 4 GB** (`/etc/modprobe.d/zfs.conf`: `options zfs zfs_arc_max=4294967296`), чтобы кэш файловой системы не конкурировал за память с гостями.
+
+**Разделение по надёжности.** `zdata` (RAIDZ1 из четырёх дисков — переживает отказ одного) несёт важные данные, которые нельзя терять: managed-volume'ы сервисов (БД, конфиги). Rootfs гостей на одиночном NVMe (`zguests`) — восстановимы из PBS. Медиатека (`zmedia`) и записи камер (`zfrigate`) на одиночных дисках — крупные, восстановимые/некритичные данные.
+
+**Managed-volume против bind-mount.** Данные, которые нужно бэкапить, размещаются на `zdata` как Proxmox-managed volume (`zdata:SIZE`, попадает в vzdump). Крупные датасеты — медиатека, фото, записи камер, файловые шары — монтируются bind-mount'ом обычного датасета с флагом `backup=0`, чтобы не гнать терабайты в PBS-снапшот.
+
+`storage.cfg` держит mountpoint пула синхронно с ZFS-свойством `mountpoint`: смена точки монтирования пула требует одновременного обновления обоих, иначе LXC с томами на этом пуле не стартуют.
 
 ### PBS
 
-Целевое хранилище бэкапов — Proxmox Backup Server на `192.168.10.15` (MGMT). Storage `pbs`, datastore `Homelab`, namespaces `pve-mini` и `pve` (раздельно по хосту-источнику). Детали PBS, restic и retention — в `06-backup.md`.
+Целевое хранилище бэкапов — Proxmox Backup Server на `192.168.10.15` (MGMT). Storage `pbs-main`, datastore `main`, namespace `pve`, токен `backup@pbs!pve`. Детали PBS и retention — в `06-backup.md`.
 
 ---
 
-## 4. DockerHost: проброс дисков и iGPU
+## 4. iGPU и хранилище данных
 
-DockerHost VM (530) — основной хост Docker-стека. ZFS-пулы данных проброшены в неё физическими дисками, чтобы корректно работали hardlinks для связки qBittorrent → \*arr → Jellyfin (эта связка требует единой файловой системы). Сетевой интерфейс внутри VM — `enp6s18` (VLAN 50, `192.168.50.30`).
+Пулы данных (`zdata`, `zmedia`, `zfrigate`) и iGPU принадлежат хосту PVE напрямую и раздаются в LXC, а не пробрасываются в отдельную VM.
 
-**Проброс дисков.** Физические диски ZFS-пулов проброшены в VM. На каждом проброшенном диске стоит флаг **`backup=0`** — PBS не пытается бэкапить многотерабайтные ZFS-пулы, снимается снапшот только системного диска VM. Данные пулов бэкапятся отдельно через restic (см. `06-backup.md`) либо не бэкапятся вовсе (медиатека, записи камер).
+**iGPU.** Intel iGPU управляется хостовым драйвером `i915`; устройства `/dev/dri/card0` (группа `video`) и `/dev/dri/renderD128` (группа `render`) разделяются между несколькими unprivileged LXC через idmap: Jellyfin (531, VAAPI-транскод, QuickSync), Immich (535) и Frigate (537). Аппаратный **транскод видео** (VAAPI) в unprivileged LXC работает; GPU-**compute** (OpenVINO inference для ML Immich и детекции Frigate) в unprivileged-контейнере не инициализируется, поэтому Immich и Frigate используют CPU. Детали GPU-проброса в медиа-LXC — в `17-media-stack.md`.
 
-**iGPU passthrough.** В DockerHost проброшен Intel iGPU (`vfio-pci`) для аппаратного транскодинга Jellyfin. Детали Docker-стека и ZFS-датасетов — в `14-dockerhost.md`.
+**Хранилище данных.** Медиатека, фото, записи камер и файловые шары лежат на HDD-пулах (`zmedia`, `zfrigate`, `zdata/Shares`) и монтируются в соответствующие LXC bind-mount'ом с `backup=0`. Связка qBittorrent → \*arr → Jellyfin работает на едином датасете `zmedia` (hardlinks требуют одной файловой системы) — все три сервиса монтируют `/zmedia` и его подкаталоги. Managed-volume'ы сервисов с важными данными — на `zdata`, попадают в vzdump.
 
 ---
 
 ## 5. Лимиты ресурсов и порядок запуска
 
-Чтобы избежать борьбы за CPU/RAM при одновременном старте (особенно DockerHost с десятками контейнеров), гостям заданы лимиты RAM и порядок запуска через `startup` (order/up/down).
+Чтобы избежать борьбы за CPU/RAM при одновременном старте, гостям заданы лимиты RAM и порядок запуска через `startup` (order/up/down).
 
-Принцип порядка: инфраструктурные и сетевые гости стартуют первыми, DockerHost — последним и с самым долгим таймаутом на корректное завершение (Docker-контейнеры должны успеть сохранить состояние). Обратный порядок применяется при выключении, в том числе по сигналу от UPS.
-
-DockerHost получает основную долю RAM с включённым balloon; остальные гости — фиксированные скромные лимиты. ZFS ARC на PVE ограничен 4 GB (см. раздел 3), чтобы кэш файловой системы не конкурировал с памятью гостей.
+Принцип порядка: инфраструктурные гости стартуют первыми, прикладные — следом. Порядок ролей: PostgreSQL (общая БД) → Traefik → Authelia → Ansible → сервисы с зависимостью от БД → мониторинг и вспомогательные → медиастек → остальное. Обратный порядок применяется при выключении, в том числе по сигналу от UPS. ZFS ARC на PVE ограничен 4 GB (см. раздел 3), чтобы кэш файловой системы не конкурировал с памятью гостей.
 
 ---
 
 ## 6. UPS и NUT
 
-Электропитание защищено UPS, обслуживается через **NUT** (Network UPS Tools). UPS подключён по USB к серверу, драйвер `nutdrv_qx`. При разряде батареи NUT через `upssched` инициирует graceful shutdown гостей в порядке, обратном запуску: первым завершается DockerHost (с длинным таймаутом на остановку контейнеров), последними — сетевые и инфраструктурные гости. Это даёт максимум шансов корректно сохранить состояние БД и не потерять данные.
+Электропитание защищено UPS (CyberPower, протокол Q1), обслуживается через **NUT** (Network UPS Tools). UPS подключён по USB к PVE, который выступает NUT-primary (`upsd`, порт 3493); PVE-Mini — вторичный клиент. При разряде батареи NUT через `upssched` инициирует graceful shutdown гостей в порядке, обратном запуску. Мониторинг UPS через веб-дашборд PeaNUT вынесен в контейнер Monitoring (`15-monitoring.md`), который подключается к `upsd` на PVE.
 
 Конфигурация NUT (`/etc/nut/`) входит в host backup хоста (см. `06-backup.md`).
 
@@ -142,7 +167,7 @@ DockerHost получает основную долю RAM с включённы�
 Что разрешено во `input` сверх общего базлайна (SSH из MGMT и VPN, loopback, conntrack, базовые ICMP):
 
 - **PVE-Mini** (`192.168.10.11`): `8006` (web/API) из MGMT, VPN, Traefik и Monitoring (pve-exporter); `9100` (node_exporter) от Monitoring.
-- **PVE** (`192.168.10.12`): `8006` из MGMT, VPN, Traefik и Monitoring; `3493` (NUT upsd) от вторичных клиентов PVE-Mini и DockerHost; `9100` от Monitoring.
-- **PBS** (`192.168.10.15`): `8007` (web/API) из MGMT, VPN, Traefik, Monitoring (pbs-exporter) и DockerHost (Homepage); `8000` (rest-server) только от restic-клиентов Vaultwarden, Authelia и DockerHost; `9100` от Monitoring.
+- **PVE** (`192.168.10.12`): `8006` из MGMT, VPN, Traefik и Monitoring; `3493` (NUT upsd) от вторичного клиента PVE-Mini и от PeaNUT в Monitoring; `9100` от Monitoring.
+- **PBS** (`192.168.10.15`): `8007` (web/API) из MGMT, VPN, Traefik и Monitoring (pbs-exporter); `9100` от Monitoring.
 
-Файловый доступ в сети обеспечивает Samba на DockerHost (см. `14-dockerhost.md`); NFS на хостах не используется. Встроенный `pve-firewall` выключен — фильтрацию несёт `nftables.service`, и включение pve-firewall параллельно создало бы две конкурирующие системы правил.
+Файловый доступ в сети обеспечивает Samba в контейнере Shares (`192.168.50.36`, см. `17-media-stack.md`); NFS на хостах не используется. Встроенный `pve-firewall` выключен — фильтрацию несёт `nftables.service`, и включение pve-firewall параллельно создало бы две конкурирующие системы правил.

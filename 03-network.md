@@ -85,11 +85,13 @@ description: |
 | `192.168.50.35` | Immich            |
 | `192.168.50.36` | Shares (Samba / FileBrowser) |
 | `192.168.50.37` | Frigate           |
+| `192.168.50.38` | OnlyOffice        |
 | `192.168.50.40` | DEV VM            |
 | `192.168.50.50` | Be-Free.Online VM |
+| `192.168.50.80` | YandexDisk        |
 | `192.168.50.90` | PostgreSQL        |
 
-Прикладной стек вынесен в отдельные LXC: медиасервер (Jellyfin), управление загрузками (Prowlarr/Sonarr/Radarr, qBittorrent), фотоархив (Immich), мониторинг камер (Frigate), файловый доступ (Samba + FileBrowser), заметки и утилиты (Organizer), общий PostgreSQL. Медиа-LXC и Immich используют iGPU хоста PVE (`05-proxmox.md`). DockerHost VM несёт остаточные Docker-сервисы, ещё не перенесённые в LXC.
+Прикладной стек вынесен в отдельные LXC: медиасервер (Jellyfin), управление загрузками (Prowlarr/Sonarr/Radarr, qBittorrent), фотоархив (Immich), мониторинг камер (Frigate), файловый доступ (Samba + FileBrowser), заметки и утилиты (Organizer), сервер документов OnlyOffice, синхронизация Яндекс.Диска, общий PostgreSQL. Медиа-LXC и Immich используют iGPU хоста PVE (`05-proxmox.md`). OnlyOffice и YandexDisk работают в Docker-in-LXC; синхронизированные Яндекс.Диском файлы попадают в общий каталог Shares. DockerHost VM несёт остаточные Docker-сервисы, ещё не перенесённые в LXC.
 
 ## 4. Гипервизоры и WAN
 

@@ -6,23 +6,23 @@ description: |
 
 # Vaultwarden
 
-Self-hosted менеджер паролей в отдельном непривилегированном LXC (`192.168.50.11`, SERVICES). Работает нативно (без Docker) на бинарнике, извлечённом из официального Docker-образа `vaultwarden/server`. БД — SQLite. Доступ только через Traefik. Версия зафиксирована, обновление вручную через замену бинарника. Базлайн LXC, systemd-sandbox, SSH-hardening, nftables-шаблон и restic-паттерн — см. `02-conventions.md`.
+Self-hosted менеджер паролей в отдельном непривилегированном LXC (`192.168.50.11`, SERVICES). Работает нативно (без Docker) на бинарнике, извлечённом из официального Docker-образа `vaultwarden/server`. БД — SQLite. Доступ только через Traefik. Версия зафиксирована, обновление вручную через замену бинарника. Базлайн LXC, systemd-sandbox, SSH-hardening, nftables-шаблон и паттерн бэкапа данных — см. `02-conventions.md`.
 
 ## 1. Файловая структура
 
 ```
 /usr/local/bin/vaultwarden            # binary extracted from the official Docker image
 /usr/share/vaultwarden/web-vault/     # web UI static
-/etc/vaultwarden/.env                 # configuration (env vars)
-/var/lib/vaultwarden/                 # home of the vaultwarden system user
-├── data/
-│   ├── db.sqlite3                    # main DB (SQLite, WAL mode)
-│   ├── attachments/                  # record attachments
-│   ├── rsa_key.pem                   # JWT signing key
-│   └── icon_cache/                   # site icon cache (excluded from backup)
-├── .restic-password                  # restic repo encryption password
-└── .restic-http-password             # rest-server HTTP basic-auth password
+/etc/vaultwarden/.env                 # configuration (managed-volume on zdata)
+/var/lib/vaultwarden/data/            # data (managed-volume on zdata)
+├── db.sqlite3                        # main DB (SQLite, WAL mode)
+├── db.sqlite3.bak                    # hourly application-consistent SQLite snapshot
+├── attachments/                      # record attachments
+├── rsa_key.pem                       # JWT signing key
+└── icon_cache/                       # site icon cache
 ```
+
+И `/etc/vaultwarden` (`.env`), и `/var/lib/vaultwarden/data` вынесены на пул `zdata` отдельными managed-volume (mount points LXC), а не на rootfs: конфигурация и данные — на отказоустойчивом RAIDZ1 и в составе PBS-снапшота (см. `06-backup.md`).
 
 Бинарь и web-vault извлекаются из официального Docker-образа через `skopeo` + `umoci` — те же файлы, что использует Docker, но без Docker-обёртки. Для динамической линковки установлены `libmariadb3` и `libpq5`, хотя используется только SQLite (Vaultwarden слинкован со всеми тремя driver-библиотеками).
 
@@ -49,9 +49,11 @@ nftables по шаблону сервисного LXC (`02-conventions.md`): `po
 
 ## 4. Резервное копирование
 
-Два механизма (см. `06-backup.md`): **PBS-снапшот всего LXC** ежедневно, и **restic-снапшот данных** через `/usr/local/sbin/vaultwarden-backup.sh` (таймер). Скрипт делает online-снапшот SQLite (`sqlite3 .backup` — атомарная копия работающей БД), затем `restic backup` всей `/var/lib/vaultwarden/data/`, исключая живой `db.sqlite3`, WAL-файлы, `icon_cache/`, `tmp/`. В бэкап попадают `db.sqlite3.backup`, `attachments/`, `rsa_key.pem`. Тег/host `vaultwarden`. Транспорт — rest-server на PBS (`rest:http://vaultwarden:...@192.168.10.15:8000/vaultwarden/`) в append-only, retention централизованно на PBS.
+Данные (`/var/lib/vaultwarden/data`) и конфигурация (`/etc/vaultwarden/.env`) лежат на managed-volume пула `zdata` и попадают в ежедневный PBS-снапшот всего LXC вместе с rootfs (см. `06-backup.md`). Восстановление LXC из PBS возвращает Vaultwarden вместе с БД, вложениями, ключом и конфигом.
 
-**Восстановление БД**: после `restic restore` файл лежит как `db.sqlite3.backup` — переименовать в `db.sqlite3` перед запуском. WAL-файлы пересоздадутся при старте.
+**Консистентность SQLite.** Рядом с боевой `db.sqlite3` systemd-таймер `vaultwarden-db-backup.timer` ежечасно запускает `sqlite3 db.sqlite3 ".backup db.sqlite3.bak"` — атомарный снапшот работающей БД. PBS-снапшот захватывает свежий `.bak` в консистентном виде; `attachments/` и `rsa_key.pem` попадают в снапшот как есть.
+
+**Восстановление БД**: после восстановления LXC актуальная консистентная база — `db.sqlite3.bak`; перед стартом сервиса её переименовывают в `db.sqlite3`, живой `db.sqlite3` из снапшота и WAL-файлы отбрасывают. Паттерн — общий, см. `02-conventions.md`.
 
 ## 5. Обновление
 
@@ -61,4 +63,4 @@ nftables по шаблону сервисного LXC (`02-conventions.md`): `po
 
 - **Traefik (`192.168.40.11`)** — единственный разрешённый источник запросов к 8000 (nftables). Без Traefik сервис недоступен снаружи LXC.
 - **Unbound на OPNsense** — DNS, split-horizon `vaultwarden.kvasok.xyz → 192.168.40.11`.
-- **PBS (`192.168.10.15`)** — restic-бэкапы и PBS-снапшоты.
+- **PBS (`192.168.10.15`)** — PBS-снапшоты LXC (данные и конфиг на zdata попадают в снапшот).

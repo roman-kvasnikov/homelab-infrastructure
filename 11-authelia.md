@@ -16,7 +16,7 @@ Authelia — Identity Provider и forward-auth прокси для Traefik: ед
 
 ```
 /usr/local/bin/authelia                # binary from github.com/authelia/authelia/releases
-/etc/authelia/                         # configs and secrets
+/etc/authelia/                         # configs and secrets (managed-volume on zdata)
 ├── configuration.yaml                 # server, log, notifier, ntp
 ├── storage.yaml                       # SQLite path
 ├── session.yaml                       # cookies + Redis connection
@@ -34,19 +34,19 @@ Authelia — Identity Provider и forward-auth прокси для Traefik: ед
     ├── OIDC_HMAC_SECRET
     └── oidc/jwks/rsa.2048.key          # RSA key for signing OIDC tokens
 
-/var/lib/authelia/                     # home of the authelia system user
+/var/lib/authelia/                     # data (managed-volume on zdata)
 ├── db.sqlite3                         # main DB (TOTP, WebAuthn, OIDC consents)
-├── notifier.log                       # fallback notifier
-├── .restic-password                   # restic repo encryption password
-├── .restic-http-password              # rest-server HTTP basic-auth password
-└── .cache/restic/                     # restic cache (excluded from backup)
+├── db.sqlite3.bak                     # hourly application-consistent SQLite snapshot
+└── notifier.log                       # fallback notifier
 ```
+
+И `/etc/authelia`, и `/var/lib/authelia` вынесены на пул `zdata` отдельными managed-volume (mount points LXC), а не лежат на rootfs: все критичные данные и конфиги — на отказоустойчивом RAIDZ1 и в составе PBS-снапшота (см. `06-backup.md`).
 
 Бинарь Authelia — обычный Go-бинарь со статически вкомпилированными зависимостями, скачивается напрямую с GitHub releases (в отличие от Vaultwarden, где приходится извлекать из Docker-образа).
 
 ## 2. Systemd
 
-Сервис `authelia.service` запускает бинарник от системного юзера `authelia`. Sandbox-набор усиленный (`NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `PrivateUsers`, `ProtectKernel*`, `RestrictNamespaces`, `LockPersonality`, пустой `CapabilityBoundingSet`, `SystemCallFilter=@system-service`) — см. `02-conventions.md`. Запись разрешена только в `/var/lib/authelia`. `Restart=always`. Зависимость от Redis: `Requires=redis-server.service` + `After=redis-server.service`.
+Сервис `authelia.service` запускает бинарник от системного юзера `authelia`. Sandbox-набор усиленный (`NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `PrivateUsers`, `ProtectKernel*`, `RestrictNamespaces`, `LockPersonality`, пустой `CapabilityBoundingSet`, `SystemCallFilter=@system-service`) — см. `02-conventions.md`. Запись разрешена в `/var/lib/authelia` (данные). `Restart=always`. Зависимость от Redis: `Requires=redis-server.service` + `After=redis-server.service`.
 
 ExecStart передаёт **семь** конфигурационных файлов через повторяющийся `--config` — Authelia мерджит их в один документ при старте. Это разделяет конфиг по областям и упрощает ревью. Автозапуск при старте контейнера.
 
@@ -91,15 +91,11 @@ Authelia **несовместима** с middleware `rate-limit` в Traefik. Е�
 
 ## 9. Резервное копирование
 
-Два независимых механизма (по общей схеме, см. `06-backup.md`):
+Данные и конфиги Authelia (`/var/lib/authelia`, `/etc/authelia`) лежат на managed-volume пула `zdata` и попадают в ежедневный PBS-снапшот всего LXC вместе с rootfs. Отдельного инструмента для данных не требуется — восстановление LXC из PBS возвращает Authelia вместе с БД, секретами и всеми YAML-конфигами.
 
-**PBS-снапшот всего LXC** — ежедневно в составе общего pve-задания. Сценарий «снёс LXC, восстановить за минуту».
+**Консистентность SQLite.** Рядом с боевой `db.sqlite3` systemd-таймер `authelia-db-backup.timer` ежечасно запускает `sqlite3 db.sqlite3 ".backup db.sqlite3.bak"` — атомарный снапшот работающей БД. PBS-снапшот захватывает свежий `.bak` в консистентном виде.
 
-**Restic-снапшот данных и конфигов** — ежедневно через `/usr/local/sbin/authelia-backup.sh` (таймер `authelia-backup.timer`). Скрипт делает online-снапшот SQLite (`sqlite3 .backup` — консистентная копия работающей БД), затем `restic backup` директорий `/var/lib/authelia/` (БД, `notifier.log`) и `/etc/authelia/` (все YAML, секреты). Исключаются живой `db.sqlite3`, WAL-файлы, `.restic-*`-пароли, `.cache/`. Тег/host `authelia`. Транспорт — rest-server на PBS (`rest:http://authelia:...@192.168.10.15:8000/authelia/`) в append-only. Retention централизованно на PBS (см. `06-backup.md`).
-
-**Восстановление БД**: после `restic restore` файл лежит как `db.sqlite3.backup` — переименовать в `db.sqlite3` перед запуском. WAL-файлы не нужны, пересоздадутся при старте.
-
-Restic-репозиторий, два пароля (encryption + HTTP basic-auth), режим append-only + private-repos — паттерн общий, см. `02-conventions.md` и `06-backup.md`.
+**Восстановление БД**: после восстановления LXC актуальная консистентная база — `db.sqlite3.bak`; перед стартом сервиса её переименовывают в `db.sqlite3`, живой `db.sqlite3` из снапшота и WAL-файлы отбрасывают. Паттерн — общий, см. `02-conventions.md` и `06-backup.md`.
 
 ## 10. Обновление
 
@@ -109,4 +105,4 @@ Restic-репозиторий, два пароля (encryption + HTTP basic-auth
 
 - **Traefik (`192.168.40.11`)** — единственный разрешённый источник запросов к 9091 (nftables); forward-auth завязан на Authelia. Без Traefik Authelia недоступна снаружи LXC.
 - **Unbound на OPNsense** — DNS, split-horizon `authelia.kvasok.xyz → 192.168.40.11`.
-- **PBS (`192.168.10.15`)** — restic-бэкапы и PBS-снапшоты.
+- **PBS (`192.168.10.15`)** — PBS-снапшоты LXC (данные и конфиги на zdata попадают в снапшот).
