@@ -6,7 +6,7 @@ description: |
 
 # Домашняя инфраструктура
 
-Индекс и высокоуровневое описание homelab. Для конкретной области — сети, гипервизоров, reverse-proxy, аутентификации, бэкапов и т.д. — переходи в отдельный документ по карте в разделе 3. Общие шаблоны (базлайн LXC, nftables, systemd-sandbox, restic) вынесены в `02-conventions.md`, сервисные документы ссылаются на них вместо дублирования.
+Индекс и высокоуровневое описание homelab. Для конкретной области — сети, гипервизоров, reverse-proxy, аутентификации, бэкапов и т.д. — переходи в отдельный документ по карте в разделе 3. Общие шаблоны (базлайн LXC, nftables, systemd-sandbox, паттерн бэкапа данных) вынесены в `02-conventions.md`, сервисные документы ссылаются на них вместо дублирования.
 
 ## 1. Общая архитектура
 
@@ -14,7 +14,7 @@ description: |
 
 Сеть разделена на **восемь VLAN** (MGMT, INFRA, TRUSTED, DMZ, SERVICES, IOT, CCTV, GUEST). В каждом сегменте OPNsense — шлюз `.1`, раздаёт адреса через Kea DHCP и резолвит имена через Unbound. Все домашние устройства, проводные и беспроводные, находятся за OPNsense в своих VLAN.
 
-Вычислительная нагрузка распределена на **два хоста Proxmox**: мини-ПК несёт сетевую плоскость (OPNsense, Omada, AmneziaWG, Xray), основной сервер — прикладные сервисы (Traefik, Vaultwarden, Authelia, Monitoring, Gotify, DockerHost и др.). Управляемый коммутатор раздаёт VLAN тегированным транком; два роутера Keenetic работают беспроводными точками доступа (L2), привязывая SSID к VLAN.
+Вычислительная нагрузка распределена на **два хоста Proxmox**: мини-ПК несёт сетевую плоскость (OPNsense, Omada, AmneziaWG, Xray), основной сервер — прикладные сервисы в отдельных LXC (Traefik, Vaultwarden, Authelia, Monitoring, Gotify, PostgreSQL, медиастек, Immich, Frigate, файловые шары, OnlyOffice и др.). Управляемый коммутатор раздаёт VLAN тегированным транком; два роутера Keenetic работают беспроводными точками доступа (L2), привязывая SSID к VLAN.
 
 Вход извне организован по двум независимым путям. **Публичные сервисы** доступны через VPS: домашний Traefik держит исходящий WireGuard-туннель к VPS, наружу порты не пробрасываются (Интернет → VPS → WG-туннель → Traefik → бэкенд). **Удалённый доступ в сеть** — через AmneziaWG (INFRA) с обфускацией трафика, по белому IP дома напрямую, минуя VPS.
 
@@ -53,11 +53,11 @@ description: |
 | Документ | Область |
 | :--- | :--- |
 | **`01-index.md`** | Этот файл — индекс, высокоуровневая архитектура, глоссарий. |
-| **`02-conventions.md`** | Канонические шаблоны: базлайн LXC, nftables сервисного контейнера, systemd-sandbox, hardening SSH, паттерн restic + rest-server, соглашения об именах. Остальные документы ссылаются сюда. |
+| **`02-conventions.md`** | Канонические шаблоны: базлайн LXC (нативный и Docker-in-LXC), nftables сервисного контейнера, systemd-sandbox, hardening SSH, паттерн бэкапа данных через managed-volume + PBS-снапшот с SQLite-хуком, соглашения об именах. Остальные документы ссылаются сюда. |
 | **`03-network.md`** | Сеть: VLAN-схема и адресация, OPNsense (WAN, интерфейсы, DHCP, Unbound, firewall), коммутатор и раскладка портов, беспроводная сеть (Keenetic AP), DNS, потоки трафика. |
 | **`04-firewall.md`** | Модель фильтрации трафика homelab: два слоя защиты (межсегментный на OPNsense и внутрисегментный на nftables хостов), floating-правила форсирования DNS, система алиасов, политика по каждому из восьми VLAN и принципы, общие для всех сегментов. |
-| **`05-proxmox.md`** | Гипервизоры: PVE-Mini и PVE-Main, storage и ZFS, лимиты ресурсов гостей, UPS/NUT, инвентарь VM и LXC. |
-| **`06-backup.md`** | Бэкап-сервер и PBS, rest-server, restic, трёхуровневая схема, retention, сценарий восстановления. |
+| **`05-proxmox.md`** | Гипервизоры: PVE-Mini и PVE, storage и ZFS-пулы, iGPU-шаринг, лимиты ресурсов гостей, UPS/NUT, инвентарь VM и LXC. |
+| **`06-backup.md`** | Бэкап-сервер и PBS: identity-модель, host-backup гипервизоров, PBS-снапшоты VM/LXC, консистентность данных сервисов, retention, сценарий восстановления. |
 | **`07-edge-vps.md`** | Публичная точка входа: VPS, nginx L4 stream + PROXY protocol, служебный WireGuard-туннель к Traefik. |
 | **`08-traefik.md`** | Traefik и CrowdSec: домены, сертификаты, entrypoints, middleware и цепочки, catch-all, метрики. |
 | **`09-amneziawg.md`** | Удалённый доступ в сеть: AmneziaWG (INFRA), обфускация, клиенты, маскарад, порт-форвард на OPNsense. |
@@ -65,15 +65,15 @@ description: |
 | **`11-authelia.md`** | Authelia и общая модель аутентификации: IdP, forward-auth, OIDC, TOTP/WebAuthn, локальный Redis. |
 | **`12-vaultwarden.md`** | Одноцелевой нативный LXC: Vaultwarden. Тонкие карточки со ссылками на `02-conventions.md` плюс специфика. |
 | **`13-gotify.md`** | Одноцелевой нативный LXC: Gotify. Тонкие карточки со ссылками на `02-conventions.md` плюс специфика. |
-| **`14-dockerhost.md`** | DockerHost VM и Docker-стек: ZFS-датасеты, networking, AppData, контейнеры, Samba. |
-| **`15-monitoring.md`** | Monitoring LXC: Prometheus, Grafana, экспортеры, дашборды, алертинг в Gotify. |
+| **`14-media-stack.md`** | Медиастек в нативных LXC: Jellyfin, arr-стек, qBittorrent; общая группа, bind-mounts на zmedia, iGPU-транскод, hardlink. |
+| **`15-monitoring.md`** | Monitoring LXC: Prometheus, Grafana, экспортеры, дашборды, PeaNUT, алертинг в Gotify. |
 | **`16-ansible.md`** | Ansible LXC: декларативное управление конфигурацией nftables и ssh с одной control node. |
 
 ## 4. Глоссарий
 
 - **OPNsense** — маршрутизатор, firewall, DHCP и DNS всей сети; VM на PVE-Mini. Единственная точка маршрутизации между VLAN и выхода в интернет.
 - **PVE / PVE-Mini** — два хоста Proxmox: сетевая плоскость и прикладные сервисы соответственно.
-- **PBS** — Proxmox Backup Server, приёмник снапшотов VM/LXC и host-бэкапов; на нём же rest-server для restic.
+- **PBS** — Proxmox Backup Server, приёмник снапшотов VM/LXC и host-бэкапов гипервизоров.
 - **Traefik** — reverse-proxy в DMZ, единственная точка входа HTTP-трафика в сеть; держит WG-туннель к VPS.
 - **VPS** — внешний сервер, точка публикации сервисов; проксирует HTTPS в WG-туннель к Traefik на L4, сертификаты не хранит.
 - **AmneziaWG** — обфусцированный VPN-сервер (INFRA) для удалённого доступа в сеть по белому IP дома.
@@ -81,8 +81,7 @@ description: |
 - **Unbound** — рекурсивный DNS-резолвер на OPNsense со split-horizon для `*.kvasok.xyz`.
 - **Keenetic (Giga / Speedster)** — два роутера в режиме точки доступа (L2), вещают SSID с привязкой к VLAN.
 - **Omada** — контроллер управляемого коммутатора TP-Link.
-- **DockerHost** — VM с основным стеком self-hosted сервисов в Docker и Samba.
+- **DockerHost** — доживающая VM с остаточными Docker-сервисами; прикладной стек вынесен в отдельные LXC, VM упраздняется по мере переноса.
 - **Authelia** — IdP и forward-auth для Traefik: TOTP, WebAuthn, OIDC.
 - **CrowdSec** — движок реактивной защиты рядом с Traefik, bouncer как плагин Traefik.
-- **rest-server** — HTTP-приёмник restic-бэкапов на PBS в режиме append-only + private-repos.
 - **VLAN 10–80** — сегменты сети: MGMT (управление), INFRA (инфраструктурные сервисы), TRUSTED (доверенные устройства), DMZ (Traefik), SERVICES (прикладные сервисы), IOT, CCTV, GUEST.
