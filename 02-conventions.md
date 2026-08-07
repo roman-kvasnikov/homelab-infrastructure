@@ -125,6 +125,9 @@ table inet filter {
 User=<service>
 Group=<service>
 
+Restart=always
+RestartSec=10
+
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -138,9 +141,6 @@ RestrictNamespaces=true
 LockPersonality=true
 
 ReadWritePaths=/var/lib/<service>
-
-Restart=always
-RestartSec=10
 ```
 
 `ProtectSystem=strict` делает всю файловую систему read-only, кроме путей в `ReadWritePaths` — обычно это единственный `/var/lib/<service>`, куда сервис пишет БД и состояние. Запись в `/var/log` при этом запрещена, поэтому логи идут в journald (`journalctl -u <service>`), файлового логирования нет.
@@ -218,7 +218,7 @@ LXC целиком поднимается из PBS-снапшота (`06-backup.
 - **UPPER_SNAKE_CASE** — для ENV-констант и `define`-блоков nftables (`TRAEFIK_IP`, `MGMT_NET`).
 - Без type-префиксов в именах.
 
-**PBS:** storage `pbs`, datastore `Homelab`, namespace `pve`.
+**PBS:** storage `pbs`, datastore `main`, namespace `pve-mini`/`pve`.
 
 **Язык:** документация и обсуждение — на русском; комментарии в конфигах и заголовки алертов — на английском.
 

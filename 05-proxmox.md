@@ -70,11 +70,10 @@ description: |
 | 538  | OnlyOffice     | LXC | SERVICES (50) | `192.168.50.38` |
 | 580  | YandexDisk     | LXC | SERVICES (50) | `192.168.50.80` |
 | 590  | PostgreSQL     | LXC | SERVICES (50) | `192.168.50.90` |
-| 120  | DockerHost     | VM  | SERVICES (50) | `192.168.50.30` |
 | 140  | Dev            | VM  | SERVICES (50) | `192.168.50.40` |
 | 150  | Be-Free.Online | VM  | SERVICES (50) | `192.168.50.50` |
 
-Детали каждого сервиса — в соответствующих документах (`08-traefik.md`, `11-authelia.md`, `12-vaultwarden.md`, `13-gotify.md`, `14-dockerhost.md`, `15-monitoring.md`, `17-media-stack.md`).
+Детали каждого сервиса — в соответствующих документах (`08-traefik.md`, `11-authelia.md`, `12-vaultwarden.md`, `13-gotify.md`, `14-media-stack.md`, `15-monitoring.md`).
 
 ---
 
@@ -104,7 +103,7 @@ SATA SSD (резерв):
 NVMe:
 └── zguests → /zguests (ZFS pool, lz4, ashift=12)
     ├── system-диски (rootfs) всех LXC
-    └── system-диски VM (DockerHost, Dev, Be-Free.Online)
+    └── system-диски VM (Dev, Be-Free.Online)
 
 HDD:
 ├── zdata → /zdata (RAIDZ1, 4 диска, lz4) — managed-volume данных сервисов
@@ -130,7 +129,7 @@ HDD:
 
 Пулы данных (`zdata`, `zmedia`, `zfrigate`) и iGPU принадлежат хосту PVE напрямую и раздаются в LXC, а не пробрасываются в отдельную VM.
 
-**iGPU.** Intel iGPU управляется хостовым драйвером `i915`; устройства `/dev/dri/card0` (группа `video`) и `/dev/dri/renderD128` (группа `render`) разделяются между несколькими unprivileged LXC через idmap: Jellyfin (531, VAAPI-транскод, QuickSync), Immich (535) и Frigate (537). Аппаратный **транскод видео** (VAAPI) в unprivileged LXC работает; GPU-**compute** (OpenVINO inference для ML Immich и детекции Frigate) в unprivileged-контейнере не инициализируется, поэтому Immich и Frigate используют CPU. Детали GPU-проброса в медиа-LXC — в `17-media-stack.md`.
+**iGPU.** Intel iGPU управляется хостовым драйвером `i915`; устройства `/dev/dri/card0` (группа `video`) и `/dev/dri/renderD128` (группа `render`) разделяются между несколькими unprivileged LXC через idmap: Jellyfin (531, VAAPI-транскод, QuickSync), Immich (535) и Frigate (537). Аппаратный **транскод видео** (VAAPI) в unprivileged LXC работает; GPU-**compute** (OpenVINO inference для ML Immich и детекции Frigate) в unprivileged-контейнере не инициализируется, поэтому Immich и Frigate используют CPU. Детали GPU-проброса в медиа-LXC — в `14-media-stack.md`.
 
 **Хранилище данных.** Медиатека, фото, записи камер и файловые шары лежат на HDD-пулах (`zmedia`, `zfrigate`, `zdata/Shares`) и монтируются в соответствующие LXC bind-mount'ом с `backup=0`. Связка qBittorrent → \*arr → Jellyfin работает на едином датасете `zmedia` (hardlinks требуют одной файловой системы) — все три сервиса монтируют `/zmedia` и его подкаталоги. Managed-volume'ы сервисов с важными данными — на `zdata`, попадают в vzdump.
 
@@ -170,4 +169,4 @@ HDD:
 - **PVE** (`192.168.10.12`): `8006` из MGMT, VPN, Traefik и Monitoring; `3493` (NUT upsd) от вторичного клиента PVE-Mini и от PeaNUT в Monitoring; `9100` от Monitoring.
 - **PBS** (`192.168.10.15`): `8007` (web/API) из MGMT, VPN, Traefik и Monitoring (pbs-exporter); `9100` от Monitoring.
 
-Файловый доступ в сети обеспечивает Samba в контейнере Shares (`192.168.50.36`, см. `17-media-stack.md`); NFS на хостах не используется. Встроенный `pve-firewall` выключен — фильтрацию несёт `nftables.service`, и включение pve-firewall параллельно создало бы две конкурирующие системы правил.
+Файловый доступ в сети обеспечивает Samba в контейнере Shares (`192.168.50.36`, см. `14-media-stack.md`); NFS на хостах не используется. Встроенный `pve-firewall` выключен — фильтрацию несёт `nftables.service`, и включение pve-firewall параллельно создало бы две конкурирующие системы правил.

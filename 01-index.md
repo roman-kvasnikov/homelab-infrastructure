@@ -81,7 +81,6 @@ description: |
 - **Unbound** — рекурсивный DNS-резолвер на OPNsense со split-horizon для `*.kvasok.xyz`.
 - **Keenetic (Giga / Speedster)** — два роутера в режиме точки доступа (L2), вещают SSID с привязкой к VLAN.
 - **Omada** — контроллер управляемого коммутатора TP-Link.
-- **DockerHost** — доживающая VM с остаточными Docker-сервисами; прикладной стек вынесен в отдельные LXC, VM упраздняется по мере переноса.
 - **Authelia** — IdP и forward-auth для Traefik: TOTP, WebAuthn, OIDC.
 - **CrowdSec** — движок реактивной защиты рядом с Traefik, bouncer как плагин Traefik.
 - **VLAN 10–80** — сегменты сети: MGMT (управление), INFRA (инфраструктурные сервисы), TRUSTED (доверенные устройства), DMZ (Traefik), SERVICES (прикладные сервисы), IOT, CCTV, GUEST.

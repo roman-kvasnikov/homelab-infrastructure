@@ -179,6 +179,7 @@ UMask=0002
 ExecStart=/opt/Sonarr/Sonarr -nobrowser -data=/var/lib/sonarr
 Restart=on-failure
 RestartSec=5
+
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=true
@@ -215,6 +216,7 @@ UMask=0002
 ExecStart=/opt/qbittorrent/qbittorrent-nox --profile=/var/lib/qbittorrent --webui-port=8080
 Restart=on-failure
 RestartSec=5
+
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=true

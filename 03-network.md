@@ -27,7 +27,7 @@ description: |
 | 20   | **INFRA**    | `192.168.20.0/24` | AmneziaWG, Xray                                                                           |
 | 30   | **TRUSTED**  | `192.168.30.0/24` | Ноутбуки, ПК, телефоны, доверенные устройства                                             |
 | 40   | **DMZ**      | `192.168.40.0/24` | Traefik — точка входа публичных сервисов                                                  |
-| 50   | **SERVICES** | `192.168.50.0/24` | Vaultwarden, Authelia, Monitoring, Gotify, PostgreSQL, медиастек, Immich, Frigate, Shares, Organizer, DockerHost VM |
+| 50   | **SERVICES** | `192.168.50.0/24` | Vaultwarden, Authelia, Monitoring, Gotify, PostgreSQL, медиастек, Immich, Frigate, Shares, Organizer и т.д. |
 | 60   | **IOT**      | `192.168.60.0/24` | Телевизоры, бытовая техника, умный дом                                                    |
 | 70   | **CCTV**     | `192.168.70.0/24` | IP-камеры                                                                                 |
 | 80   | **GUEST**    | `192.168.80.0/24` | Гостевой Wi-Fi                                                                            |
@@ -50,6 +50,7 @@ description: |
 | `192.168.10.25` | Точка доступа Keenetic Giga      |
 | `192.168.10.26` | Точка доступа Keenetic Speedster |
 | `192.168.10.31` | Omada Controller                 |
+| `192.168.10.50` | MGMT Notebook                    |
 | `192.168.10.99` | Ansible                          |
 
 ### 3.2. INFRA (VLAN 20)
@@ -77,7 +78,6 @@ description: |
 | `192.168.50.12` | Authelia          |
 | `192.168.50.21` | Monitoring        |
 | `192.168.50.22` | Gotify            |
-| `192.168.50.30` | DockerHost VM     |
 | `192.168.50.31` | Jellyfin          |
 | `192.168.50.32` | Arr (Prowlarr / Sonarr / Radarr) |
 | `192.168.50.33` | qBittorrent       |
@@ -91,7 +91,7 @@ description: |
 | `192.168.50.80` | YandexDisk        |
 | `192.168.50.90` | PostgreSQL        |
 
-Прикладной стек вынесен в отдельные LXC: медиасервер (Jellyfin), управление загрузками (Prowlarr/Sonarr/Radarr, qBittorrent), фотоархив (Immich), мониторинг камер (Frigate), файловый доступ (Samba + FileBrowser), заметки и утилиты (Organizer), сервер документов OnlyOffice, синхронизация Яндекс.Диска, общий PostgreSQL. Медиа-LXC и Immich используют iGPU хоста PVE (`05-proxmox.md`). OnlyOffice и YandexDisk работают в Docker-in-LXC; синхронизированные Яндекс.Диском файлы попадают в общий каталог Shares. DockerHost VM несёт остаточные Docker-сервисы, ещё не перенесённые в LXC.
+Прикладной стек вынесен в отдельные LXC: медиасервер (Jellyfin), управление загрузками (Prowlarr/Sonarr/Radarr, qBittorrent), фотоархив (Immich), мониторинг камер (Frigate), файловый доступ (Samba + FileBrowser), заметки и утилиты (Organizer), сервер документов OnlyOffice, синхронизация Яндекс.Диска, общий PostgreSQL. Медиа-LXC и Immich используют iGPU хоста PVE (`05-proxmox.md`). OnlyOffice и YandexDisk работают в Docker-in-LXC; синхронизированные Яндекс.Диском файлы попадают в общий каталог Shares.
 
 ## 4. Гипервизоры и WAN
 
@@ -121,7 +121,7 @@ description: |
 | :--- | :------------------------------- | :----------------------------------------- |
 | 1    | Точка доступа Keenetic Giga      | Trunk (native MGMT/10, tagged 30/60/70/80) |
 | 2    | Точка доступа Keenetic Speedster | Trunk (native MGMT/10, tagged 30/60/70/80) |
-| 3    | Резерв                           |
+| 3    | LG TV                            | Access IOT/60                              |
 | 4    | Резерв                           |
 | 5    | PVE                              | Trunk                                      |
 | 6    | PBS                              | Access MGMT/10                             |
