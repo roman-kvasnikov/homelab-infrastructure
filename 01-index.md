@@ -78,7 +78,7 @@ description: |
 - **VPS** — внешний сервер, точка публикации сервисов; проксирует HTTPS в WG-туннель к Traefik на L4, сертификаты не хранит.
 - **AmneziaWG** — обфусцированный VPN-сервер (INFRA) для удалённого доступа в сеть по белому IP дома.
 - **Xray** — прокси гео-обхода (INFRA): forward-прокси для сервисов и прозрачное проксирование телевизоров; через него же ходит исходящий трафик CrowdSec.
-- **Unbound** — рекурсивный DNS-резолвер на OPNsense со split-horizon для `*.kvasok.xyz`.
+- **Unbound** — DNS-резолвер на OPNsense: split-horizon для `*.kvasok.xyz`, наружу — форвардинг по DoT на публичные резолверы (не чистая рекурсия).
 - **Keenetic (Giga / Speedster)** — два роутера в режиме точки доступа (L2), вещают SSID с привязкой к VLAN.
 - **Omada** — контроллер управляемого коммутатора TP-Link.
 - **Authelia** — IdP и forward-auth для Traefik: TOTP, WebAuthn, OIDC.

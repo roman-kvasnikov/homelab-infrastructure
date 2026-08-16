@@ -217,9 +217,11 @@ SSH ужесточён общим drop-in `10-hardening.conf` (см. `02-convent
 
 ## 8. CrowdSec
 
-CrowdSec engine работает на Traefik LXC рядом с Traefik; bouncer интегрирован как плагин Traefik (Yaegi).
+CrowdSec engine работает на Traefik LXC рядом с Traefik; bouncer подключён как **локальный** плагин Traefik (Yaegi, `localPlugins`).
 
-CrowdSec engine и плагин Traefik работают. Была проблема с исходящей связностью: плагин CrowdSec скачивается Traefik'ом с `plugins.traefik.io` при старте, engine синхронизируется с `api.crowdsec.net` (CAPI), а сам Traefik для DNS-01 через `namecheap` обращается к API Namecheap — эти хосты не поднимались через сеть провайдера напрямую. Решено заворотом исходящего трафика через Xray-прокси: переменные `HTTP_PROXY`/`HTTPS_PROXY` на HTTP-порт Xray (`http://192.168.20.12:10809`) прописаны в systemd-юнитах `traefik.service` (скачивание плагина + namecheap ACME) и `crowdsec.service` (CAPI). Это добавляет зависимость Traefik и CrowdSec от Xray-VM для обновления плагина, выпуска namecheap-сертификатов и community-фида (при недоступности Xray эти операции не пройдут, но уже загруженные плагин, сертификаты, сценарии и локальные детекты продолжают работать).
+**Локальный плагин, а не удалённый.** Удалённые плагины Traefik скачиваются с `plugins.traefik.io` при каждом старте, что создавало гонку с готовностью сети на буте: пока исходящая связность не поднята, скачивание падало, и все роутеры с middleware `crowdsec` не поднимались. Перевод bouncer'а в `localPlugins` (плагин лежит на диске LXC) убирает сетевую зависимость при старте целиком — CrowdSec-защита поднимается независимо от внешней сети.
+
+**Заворот исходящего через Xray.** Часть исходящего трафика CrowdSec и Traefik всё же уходит наружу: engine синхронизируется с CAPI (`api.crowdsec.net`), а Traefik для DNS-01 через `namecheap` обращается к API Namecheap — эти хосты не поднимаются через сеть провайдера напрямую. Поэтому `HTTP_PROXY`/`HTTPS_PROXY` на HTTP-порт Xray (`http://192.168.20.12:10809`) прописаны в `crowdsec.service` (CAPI) и `traefik.service` (namecheap ACME). При недоступности Xray не пройдут только CAPI-синхронизация и выпуск namecheap-сертификатов; уже выданные сертификаты, локальный плагин, сценарии и детекты продолжают работать.
 
 ### 8.1. Коллекции
 
@@ -251,5 +253,5 @@ CrowdSec engine отдаёт Prometheus-метрики на `192.168.40.11:6060`
 - **Unbound на OPNsense** — split-horizon `*.kvasok.xyz → 192.168.40.11`, DNS для DNS-01 ACME.
 - **Бэкенды в SERVICES** — Vaultwarden, Authelia, Gotify, Monitoring, медиастек, Immich, Frigate, Shares/FileBrowser, OnlyOffice и прочие сервисы — цели проксирования (доступ по явным firewall-разрешениям).
 - **Monitoring LXC (`192.168.50.21`)** — скрейпит метрики Traefik (8081) и CrowdSec (6060).
-- **Xray (`192.168.20.12`)** — HTTP-прокси для исходящего трафика Traefik (скачивание плагина CrowdSec с `plugins.traefik.io`, выпуск сертификатов через `namecheap`) и CrowdSec engine (CAPI-синхронизация), через `HTTP_PROXY`/`HTTPS_PROXY` в `traefik.service` и `crowdsec.service`.
+- **Xray (`192.168.20.12`)** — HTTP-прокси для исходящего трафика Traefik (выпуск сертификатов через `namecheap` DNS-01) и CrowdSec engine (CAPI-синхронизация), через `HTTP_PROXY`/`HTTPS_PROXY` в `traefik.service` и `crowdsec.service`. Bouncer-плагин локальный (`localPlugins`), по сети не качается.
 - **PBS (`192.168.10.15`)** — снапшоты LXC.

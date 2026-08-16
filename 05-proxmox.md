@@ -87,7 +87,7 @@ description: |
 | `zguests` | zfspool | NVMe                 | Виртуальные диски всех VM/LXC       |
 | `zdata`   | zfspool | RAIDZ1 (4× HDD)      | Managed-volume данных сервисов      |
 | `zssd`    | zfspool | SATA SSD             | Резервный SSD-пул                   |
-| `pbs-main`| pbs     | PBS `192.168.10.15`  | Бэкап-цель для VM/LXC и host backup |
+| `pbs`     | pbs     | PBS `192.168.10.15`  | Бэкап-цель для VM/LXC и host backup |
 
 Пять ZFS-пулов, каждый монтируется в корень по своему имени.
 
@@ -121,7 +121,7 @@ HDD:
 
 ### PBS
 
-Целевое хранилище бэкапов — Proxmox Backup Server на `192.168.10.15` (MGMT). Storage `pbs-main`, datastore `main`, namespace `pve`, токен `backup@pbs!pve`. Детали PBS и retention — в `06-backup.md`.
+Целевое хранилище бэкапов — Proxmox Backup Server на `192.168.10.15` (MGMT). Storage `pbs`, datastore `main`, namespaces `pve` (гости PVE) и `pve-mini` (гости PVE-Mini), токены `backup@pbs!pve` / `backup@pbs!pve-mini`. Детали PBS и retention — в `06-backup.md`.
 
 ---
 
@@ -145,7 +145,7 @@ HDD:
 
 ## 6. UPS и NUT
 
-Электропитание защищено UPS (CyberPower, протокол Q1), обслуживается через **NUT** (Network UPS Tools). UPS подключён по USB к PVE, который выступает NUT-primary (`upsd`, порт 3493); PVE-Mini — вторичный клиент. При разряде батареи NUT через `upssched` инициирует graceful shutdown гостей в порядке, обратном запуску. Мониторинг UPS через веб-дашборд PeaNUT вынесен в контейнер Monitoring (`15-monitoring.md`), который подключается к `upsd` на PVE.
+Электропитание защищено UPS (CyberPower UT2200EG), обслуживается через **NUT** (Network UPS Tools). UPS подключён по USB к PVE (драйвер `usbhid-ups`, USB HID), который выступает NUT-primary (`upsd`, порт 3493); PVE-Mini и PBS — вторичные клиенты (`upsmon` в режиме secondary). При разряде батареи NUT через `upssched` инициирует graceful shutdown гостей в порядке, обратном запуску. Мониторинг UPS через веб-дашборд PeaNUT вынесен в контейнер Monitoring (`15-monitoring.md`), который подключается к `upsd` на PVE.
 
 Конфигурация NUT (`/etc/nut/`) входит в host backup хоста (см. `06-backup.md`).
 
@@ -166,7 +166,7 @@ HDD:
 Что разрешено во `input` сверх общего базлайна (SSH из MGMT и VPN, loopback, conntrack, базовые ICMP):
 
 - **PVE-Mini** (`192.168.10.11`): `8006` (web/API) из MGMT, VPN, Traefik и Monitoring (pve-exporter); `9100` (node_exporter) от Monitoring.
-- **PVE** (`192.168.10.12`): `8006` из MGMT, VPN, Traefik и Monitoring; `3493` (NUT upsd) от вторичного клиента PVE-Mini и от PeaNUT в Monitoring; `9100` от Monitoring.
+- **PVE** (`192.168.10.12`): `8006` из MGMT, VPN, Traefik и Monitoring; `3493` (NUT upsd) от вторичных клиентов PVE-Mini и PBS и от PeaNUT в Monitoring; `9100` от Monitoring.
 - **PBS** (`192.168.10.15`): `8007` (web/API) из MGMT, VPN, Traefik и Monitoring (pbs-exporter); `9100` от Monitoring.
 
 Файловый доступ в сети обеспечивает Samba в контейнере Shares (`192.168.50.36`, см. `14-media-stack.md`); NFS на хостах не используется. Встроенный `pve-firewall` выключен — фильтрацию несёт `nftables.service`, и включение pve-firewall параллельно создало бы две конкурирующие системы правил.

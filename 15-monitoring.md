@@ -25,15 +25,17 @@ Grafana — пакет `grafana` версии `13.1.0` под `grafana-server.se
 
 Локальные экспортеры под systemd, каждый слушает только loopback и скрейпится Prometheus'ом по `127.0.0.1`: `node_exporter` (`9100`) — метрики самого хоста Monitoring, `proxmox-pve-exporter` (`9221`) — опрос API обоих гипервизоров, `pbs-exporter` (`10019`) — опрос API PBS, `blackbox_exporter` (`9115`) — HTTP-пробы внешних сервисов.
 
+Отдельно в этом же LXC работает **PeaNUT** — веб-дашборд состояния UPS (`8080`). Он не экспортер Prometheus, а самостоятельный UI: подключается к NUT-primary (`upsd` на PVE, `192.168.10.12:3493`) и показывает заряд, нагрузку и статус ИБП. Публикуется наружу через Traefik. NUT/UPS-плоскость — в `05-proxmox.md` (раздел 6).
+
 ## 2. Сетевая фильтрация
 
-nftables по шаблону сервисного LXC: `policy drop` на входе, loopback и conntrack established/related, базовые ICMP/ICMPv6. Разрешённые входящие: SSH (`22`) из MGMT и VPN; Grafana (`3000`) только с Traefik (`192.168.40.11`) и DockerHost (`192.168.50.30`, виджет Homepage); Prometheus (`9090`) только с Traefik. Локальные экспортеры (`9100`, `9221`, `10019`, `9115`) наружу не открыты — Prometheus берёт их по loopback. Chain `forward` — `drop`, `output` — `accept`.
+nftables по шаблону сервисного LXC: `policy drop` на входе, loopback и conntrack established/related, базовые ICMP/ICMPv6. Разрешённые входящие: SSH (`22`) из MGMT и VPN; Grafana (`3000`), Prometheus (`9090`) и PeaNUT (`8080`) — с Traefik (`192.168.40.11`) и Homepage (`192.168.20.20`, виджеты дашборда). Локальные экспортеры (`9100`, `9221`, `10019`, `9115`) наружу не открыты — Prometheus берёт их по loopback. Chain `forward` — `drop`, `output` — `accept`.
 
-Prometheus скрейпит цели в других сегментах: `node_exporter` на MGMT-хостах (`192.168.10.11`, `192.168.10.12`, `192.168.10.15`, порт `9100`), `node_exporter` на DockerHost (`192.168.50.30:9100`), метрики Traefik (`192.168.40.11:8081`) и CrowdSec (`192.168.40.11:6060`), а через локальные экспортеры — API гипервизоров и PBS. Эти межсегментные обращения (SERVICES → MGMT и SERVICES → DMZ) открываются явными правилами на OPNsense и на nftables целевых хостов (типовой случай «открытие порта для Monitoring LXC» — см. `02-conventions.md`).
+Prometheus скрейпит цели в других сегментах: `node_exporter` на MGMT-хостах (`192.168.10.11`, `192.168.10.12`, `192.168.10.15`, порт `9100`), метрики Traefik (`192.168.40.11:8081`) и CrowdSec (`192.168.40.11:6060`), а через локальные экспортеры — API гипервизоров и PBS. Эти межсегментные обращения (SERVICES → MGMT и SERVICES → DMZ) открываются явными правилами на OPNsense и на nftables целевых хостов (типовой случай «открытие порта для Monitoring LXC» — см. `02-conventions.md`).
 
 ## 3. Публикация и авторизация
 
-Grafana опубликована через Traefik как `grafana.kvasok.xyz` (`root_url = https://grafana.kvasok.xyz/`, `http_addr` пуст → слушает `0.0.0.0:3000`) под цепочкой `chain-admin` плюс middleware `authelia`: сетевое ограничение `allow-mgmt-ips` (MGMT + VPN) и security-headers, поверх которых forward-auth Authelia (TOTP/WebAuthn) требует второй фактор (см. `08-traefik.md`, `11-authelia.md`). Prometheus UI (`9090`) фронтится Traefik под той же связкой `chain-admin` + `authelia` (порт `9090` на nftables открыт только с Traefik).
+Grafana опубликована через Traefik как `grafana.kvasok.xyz` (`root_url = https://grafana.kvasok.xyz/`, `http_addr` пуст → слушает `0.0.0.0:3000`) под цепочкой `chain-admin` плюс middleware `authelia`: сетевое ограничение `allow-mgmt-ips` (MGMT + VPN) и security-headers, поверх которых forward-auth Authelia (TOTP/WebAuthn) требует второй фактор (см. `08-traefik.md`, `11-authelia.md`). Prometheus UI (`9090`) фронтится Traefik под той же связкой `chain-admin` + `authelia` (порт `9090` на nftables открыт с Traefik и Homepage).
 
 Аутентификация Grafana — собственная, локальные пользователи (логин/пароль); внешние провайдеры (OIDC/`generic_oauth`, `auth.proxy`) и анонимный доступ выключены. У Prometheus UI своей аутентификации нет, поэтому единственный фактор доступа к нему — Authelia перед Traefik. Итоговая модель защиты админок мониторинга: сетевое ограничение до MGMT + VPN, forward-auth Authelia со вторым фактором и — для Grafana — собственный локальный вход.
 
@@ -42,7 +44,7 @@ Grafana опубликована через Traefik как `grafana.kvasok.xyz` 
 `scrape_interval` и `evaluation_interval` — `15s`, `external_labels: monitor=homelab`. Джобы:
 
 - **prometheus** — сам себя (`127.0.0.1:9090`).
-- **node** — `node_exporter` (`9100`) на пяти хостах с метками `instance`: `monitoring` (`127.0.0.1`), `pve-mini` (`192.168.10.11`), `pve` (`192.168.10.12`), `pbs` (`192.168.10.15`), `dockerhost` (`192.168.50.30`).
+- **node** — `node_exporter` (`9100`) на четырёх хостах с метками `instance`: `monitoring` (`127.0.0.1`), `pve-mini` (`192.168.10.11`), `pve` (`192.168.10.12`), `pbs` (`192.168.10.15`).
 - **pve** и **pve-mini** — через локальный `proxmox-pve-exporter` (`127.0.0.1:9221`, `metrics_path=/pve`, модули `pve`/`pve-mini`), реальные цели опроса — `192.168.10.12` и `192.168.10.11`.
 - **pbs** — локальный `pbs-exporter` (`127.0.0.1:10019`, `scrape_interval=60s`), опрашивает API PBS read-only токеном `monitoring@pbs!pbs-exporter` (роль `Audit`, см. `06-backup.md`).
 - **blackbox-http** — локальный `blackbox_exporter` (`127.0.0.1:9115`, модуль `http_2xx`, `60s`): пробы доступности `vaultwarden`, `authelia`, `anchor`, `plumio`, `filebrowser`, `immich`, `linkwarden` (`*.kvasok.xyz`).
@@ -66,7 +68,8 @@ Grafana unified alerting, вся конфигурация — как код в `
 ## 8. Зависимости
 
 - **Traefik (`192.168.40.11`)** — публикует Grafana и Prometheus UI под `chain-admin`; одновременно цель скрейпа (метрики Traefik `8081` и CrowdSec `6060`).
-- **Хосты с `node_exporter`** — PVE-Mini, PVE, PBS (MGMT, `9100`) и DockerHost (`192.168.50.30:9100`).
+- **Хосты с `node_exporter`** — PVE-Mini, PVE, PBS (MGMT, `9100`).
+- **NUT-primary на PVE (`192.168.10.12:3493`)** — источник данных для дашборда PeaNUT (см. `05-proxmox.md`).
 - **API гипервизоров и PBS** — источники для `proxmox-pve-exporter` и `pbs-exporter` (токен `monitoring@pbs!pbs-exporter`, роль `Audit`).
 - **Gotify (`192.168.50.22`)** — доставка алертов через приложение `grafana-alerts`.
 - **OPNsense** — межсегментные allow-правила для скрейпа (SERVICES → MGMT `9100`, SERVICES → DMZ `8081`/`6060`).

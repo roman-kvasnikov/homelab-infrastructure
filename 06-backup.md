@@ -8,7 +8,7 @@ description: |
 
 Бэкапы организованы по двухуровневой схеме, где каждый уровень закрывает свою задачу. Всё складывается на один бэкап-сервер `192.168.10.15` (MGMT).
 
-Два уровня: конфигурация гипервизоров через PBS host-backup (уровень 1) и образы всех VM и LXC через PBS-снапшоты (уровень 2). Данные stateful-сервисов не выделяются в отдельный инструмент — они лежат на managed-volume, который попадает в PBS-снапшот LXC вместе с rootfs; консистентность БД обеспечивается application-consistent снапшотом рядом с боевой базой (см. раздел 4).
+Два уровня: конфигурация гипервизоров через PBS host-backup (уровень 1) и образы всех VM и LXC через PBS-снапшоты (уровень 2). Данные stateful-сервисов не выделяются в отдельный инструмент — они лежат на managed-volume, который попадает в PBS-снапшот LXC вместе с rootfs; консистентность БД обеспечивается application-consistent снапшотом рядом с боевой базой (см. раздел 4). Крупные датасеты, исключённые из снапшота (`backup=0`), защищаются отдельно: file-level бэкап в `main` плюс вторая копия через Pull Sync (см. раздел 5).
 
 ## 1. Бэкап-сервер
 
@@ -19,11 +19,14 @@ Datastore `main` расположен на дисковом хранилище �
 ```
 main/
 ├── .chunks/      # deduplicated chunks
-├── ns/pve/       # namespace "pve" — снапшоты гостей и host-backup
+├── ns/pve/       # namespace "pve" — снапшоты гостей PVE и host-backup
+├── ns/pve-mini/   # namespace "pve-mini" — снапшоты гостей PVE-Mini и host-backup
 ├── ct/           # LXC snapshots
 ├── vm/           # VM snapshots
 └── host/         # host backups гипервизоров
 ```
+
+Помимо `main`, на PBS есть два датастора на отдельных дисках — `immich-copy` и `shares-copy`, приёмники Sync-задач (pull) для фотоархива Immich и файловых шар (см. раздел 5).
 
 ### 1.1. Identity-модель PBS
 
@@ -58,11 +61,11 @@ main/
 
 **Что:** образы дисков всех VM и LXC + их конфиги.
 
-**Чем:** PBS, datastore `main`, namespace `pve`.
+**Чем:** PBS, datastore `main`, namespaces `pve` (гости PVE) и `pve-mini` (гости PVE-Mini).
 
-**Откуда:** инициируют оба гипервизора через storage `pbs-main` (токены `backup@pbs!pve` и `backup@pbs!pve-mini`, роль `DatastoreBackup` — append-only). Ежедневно, mode `snapshot`, compression `ZSTD`, selection `All`.
+**Откуда:** инициируют оба гипервизора через storage `pbs` (токены `backup@pbs!pve` и `backup@pbs!pve-mini`, роль `DatastoreBackup` — append-only). Ежедневно, mode `snapshot`, compression `ZSTD`, selection `All`.
 
-**Что в снапшот не попадает.** Крупные датасеты монтируются в гостей bind-mount'ом с флагом `backup=0` и в PBS-снапшот не входят: медиатека (`zmedia`), записи камер (`zfrigate`), файловые шары (`zdata/Shares`), фотоархив Immich. Managed-volume'ы с важными данными сервисов (`zdata:...`) флага `backup=0` не несут и попадают в снапшот вместе с rootfs гостя.
+**Что в снапшот не попадает.** Крупные датасеты монтируются в гостей bind-mount'ом с флагом `backup=0` и в PBS-снапшот не входят. Часть из них не бэкапится вовсе как восстановимая/некритичная: медиатека (`zmedia`), записи камер (`zfrigate`). Фотоархив Immich и файловые шары (`zdata/Shares`) тоже исключены из снапшота, но защищены отдельным file-level бэкапом со второй копией через Pull Sync (см. раздел 5). Managed-volume'ы с важными данными сервисов (`zdata:...`) флага `backup=0` не несут и попадают в снапшот вместе с rootfs гостя.
 
 ## 4. Данные stateful-сервисов
 
@@ -72,26 +75,34 @@ PBS-снапшот целого LXC закрывает сценарий «снё
 
 **Важные данные на надёжном пуле.** Managed-volume'ы сервисов лежат на `zdata` (RAIDZ1, переживает отказ одного диска), а не на одиночном NVMe rootfs. Vaultwarden и Authelia держат на `zdata` не только данные (`/var/lib/<service>`), но и конфиги (`/etc/vaultwarden`, `/etc/authelia` — отдельным managed-volume), чтобы всё критичное было на отказоустойчивом пуле и в PBS-снапшоте. Детали — в `11-authelia.md` и `12-vaultwarden.md`.
 
-## 5. Retention-политики
+## 5. Крупные датасеты вне снапшота (file-level + Pull Sync)
 
-**PBS (VM/LXC и host-backup, единая):** Prune Job ежедневно — keep-last 3, keep-daily 7, keep-weekly 4, keep-monthly 6. Garbage Collection — воскресенье 07:00. Verify Job — воскресенье 08:00, skip-verified, re-verify after 30 дней.
+Фотоархив Immich и файловые шары Samba лежат на bind-mount'ах пула `zdata` и исключены из PBS-снапшота LXC флагом `backup=0` — гнать их терабайты в CT-снапшот вместе с rootfs бессмысленно. В отличие от медиатеки и записей камер (восстановимые/некритичные — не бэкапятся вовсе), эти данные важны и защищены отдельным путём в два шага.
+
+**Первичный бэкап в `main`.** Отдельное file-level задание `proxmox-backup-client` снимает фотоархив Immich и содержимое шар в datastore `main`. Для Immich заданы exclude-паттерны `/upload/thumbs` и `/upload/encoded-video` (пути archive-relative, а не абсолютные) — превьюшки и перекодированное видео восстановимы из оригиналов и в бэкап не идут.
+
+**Вторая копия через Pull Sync.** PBS Sync Jobs (pull) копируют эти бэкапы из `main` на отдельные физические диски — датасторы `immich-copy` (фотоархив Immich) и `shares-copy` (файловые шары). Так крупные данные получают вторую копию на независимых носителях, не завися от единственного диска `main`.
+
+## 6. Retention-политики
+
+**PBS (VM/LXC и host-backup, единая):** Prune Job ежедневно — keep-last 3, keep-daily 7, keep-weekly 4, keep-monthly 6. Garbage Collection — среда 14:00. Verify Job — воскресенье 14:00, skip-verified, re-verify after 30 дней.
 
 Retention выполняется локально на PBS от `root@pam`; клиентские токены гипервизоров (append-only) prune не выполняют и физически не могут.
 
-## 6. Сценарий полного восстановления
+## 7. Сценарий полного восстановления
 
 При потере системного диска гипервизора:
 
 1. Установить свежий Proxmox на новый диск.
 2. Настроить базовую сеть, чтобы видеть бэкап-сервер.
-3. Подключить PBS storage `pbs-main` через токен.
+3. Подключить PBS storage `pbs` через токен.
 4. Восстановить host-backup: `proxmox-backup-client restore` для `/etc/pve`, `/etc/network`, `/etc/nut` и прочих конфигов.
 5. После перезапуска гипервизор видит все конфиги VM/LXC из восстановленного `/etc/pve`.
-6. Восстановить VM/LXC из PBS-снапшотов (namespace `pve`) через UI.
+6. Восстановить VM/LXC из PBS-снапшотов (namespace `pve` для гостей PVE, `pve-mini` для гостей PVE-Mini) через UI.
 7. Импортировать ZFS-пулы данных (`zpool import`) — метаданные на дисках живы, пулы поднимутся; проверить синхронность mountpoint пулов и `storage.cfg`.
 8. Для сервиса на SQLite после восстановления взять консистентную базу из `db.sqlite3.bak`.
 
-## 7. Зависимости
+## 8. Зависимости
 
 - **PBS (`192.168.10.15`)** — цель всех бэкапов, хост retention.
 - **Гипервизоры (PVE-Mini, PVE)** — источники host-backup и PBS-снапшотов через токены `backup@pbs!pve-mini` / `backup@pbs!pve`.
