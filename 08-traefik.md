@@ -18,9 +18,13 @@ DMZ по замыслу содержит только Traefik — все чув�
 
 ## 2. Конфигурация
 
-Главный конфиг — `/etc/traefik/traefik.yaml`. Динамические провайдеры — `/etc/traefik/dynamic/*.yaml` (по файлу на сервис плюс общий `config.yaml` со всеми middleware и TLS-опциями), директория читается с `watch: true`. Access-логи включены и используются парсером CrowdSec.
+Главный конфиг — `/etc/traefik/traefik.yaml`. Секреты и окружение (токен Timewebcloud, ключ Namecheap API, `HTTP_PROXY`/`HTTPS_PROXY` на Xray) — в `/etc/traefik/.env`, подключаемом как `EnvironmentFile` в systemd-юните, в конфиг не попадают. Динамические провайдеры — `/etc/traefik/dynamic/*.yaml` (по файлу на сервис плюс общий `config.yaml` со всеми middleware и TLS-опциями), директория читается с `watch: true`. Access-логи (`/var/log/traefik/access.log`) включены и используются парсером CrowdSec; основной лог (`/var/log/traefik/traefik.log`) пишется с уровнем `WARN`.
 
-Entrypoint `websecure` (443) принимает PROXY protocol только от VPS внутри туннеля (`proxyProtocol.trustedIPs: ["10.0.0.1"]`). Метрики Prometheus отдаются на отдельном entrypoint `metrics` (`192.168.40.11:8081`) — секция `metrics.prometheus.entryPoint: metrics` в `traefik.yaml`. Изменения статической конфигурации (entryPoints) требуют полного рестарта сервиса — `watch: true` относится только к динамическому провайдеру.
+Весь `/etc/traefik` — самостоятельный git-репозиторий (`github.com/roman-kvasnikov/homelab-traefik`), изменения коммитятся и пушатся вручную скриптом `git-push.sh`. Секреты и артефакты (`.env`, `acme.json`, `default.crt/key`, `plugins-storage`) в `.gitignore`, в репозиторий не попадают. Это отдельный от Ansible путь версионирования — в отличие от `nftables.conf` (раздел 7), который генерируется и раскатывается Ansible (`16-ansible.md`).
+
+Четыре entrypoint'а: `web` (`:80`) — редирект на `websecure` (301, permanent); реально недостижим извне, так как nftables не открывает 80 порт — весь трафик и так приходит на 443 (напрямую из LAN или через VPS). `websecure` (`:443`, `asDefault: true`) — основной, принимает PROXY protocol только от VPS внутри туннеля (`proxyProtocol.trustedIPs: ["10.0.0.1"]`). `internal` (`192.168.40.11:8079`) — API/дашборд Traefik и виджет Homepage. `metrics` (`192.168.40.11:8081`) — Prometheus (`metrics.prometheus.entryPoint: metrics`). Изменения статической конфигурации (entryPoints) требуют полного рестарта сервиса — `watch: true` относится только к динамическому провайдеру.
+
+**Дашборд.** `https://traefik.kvasok.xyz` (роутер `traefik-dashboard`, entrypoint `websecure`) отдаёт `api@internal` через `chain-admin` + `authelia` — доступ только из MGMT/VPN и только после входа через Authelia. Тот же `api@internal` отдельно висит на entrypoint `internal` (роутер `traefik-api`, `chain-internal`) — этим путём до него достаёт Homepage; правда, физически на 8079 порт по nftables (раздел 7) пускают только сам Homepage, так что запас `chain-internal` на MGMT/TRUSTED/VPN здесь не реализуется — более узкий внешний слой режет раньше. `traefik-ping` (`traefik.kvasok.xyz/ping` → `ping@internal`) — healthcheck-эндпоинт (`ping.manualRouting: true` в статическом конфиге).
 
 ## 3. TLS-опции
 
@@ -128,26 +132,29 @@ allow-media-ips: # media (Jellyfin)
 
 ## 7. Файрвол (nftables)
 
-Traefik — точка входа всего HTTP-трафика, поэтому фильтрация консервативна: whitelist с `policy drop`. В отличие от типовых сервисных LXC (см. `02-conventions.md`), у Traefik nftables специфичен — он терминирует туннель к VPS, принимает 443 из внутренних VLAN и отдаёт метрики Monitoring. Используется одна таблица `inet filter`; NAT на Traefik нет — в routed-модели VPN-трафик доходит под своим адресом `10.8.0.0/24`.
+Traefik — точка входа всего HTTP-трафика, поэтому фильтрация консервативна: whitelist с `policy drop`. В отличие от типовых сервисных LXC (см. `02-conventions.md`), у Traefik nftables специфичен — он терминирует туннель к VPS, принимает 443 из внутренних VLAN и отдаёт метрики Monitoring. Используется одна таблица `inet filter`; NAT на Traefik нет — в routed-модели VPN-трафик доходит под своим адресом `10.8.0.0/24`. Конфиг генерируется и раскатывается Ansible (`16-ansible.md`) — файл на хосте начинается с пометки «Managed by Ansible, do not edit by hand»; define-блок несёт общий для всех хостов инвентарь адресов, ниже показаны только реально используемые в правилах Traefik.
 
-Что разрешено во входящих: loopback и conntrack established/related; базовые ICMP; SSH (22) из MGMT и VPN; HTTPS (443) на `eth0` из внутренних доверенных VLAN (через split-horizon клиенты идут на `192.168.40.11`); HTTPS (443) на `wg0` от VPS (`10.0.0.1`, публичный трафик с PROXY protocol) и VPN-подсети; внутренний Traefik API (8079) только с Homepage (`192.168.20.20`, виджет дашборда); метрики Traefik (8081) и CrowdSec (6060) только с Monitoring LXC (`192.168.50.21`).
+Что разрешено во входящих: loopback и conntrack established/related; базовые ICMP; SSH (22) из MGMT и VPN; HTTPS (443) на `eth0` из внутренних доверенных VLAN — **MGMT, INFRA, TRUSTED, SERVICES, IOT** (через split-horizon клиенты идут на `192.168.40.11`; INFRA добавлен, чтобы AmneziaWG и Xray сами могли достучаться до сервисов через Traefik); HTTPS (443) на `wg0` от VPS (`10.0.0.1`, публичный трафик с PROXY protocol) и VPN-подсети; внутренний Traefik API (8079) только с Homepage (`192.168.20.20`, виджет дашборда); метрики Traefik (8081) и CrowdSec (6060) только с Monitoring LXC (`192.168.50.21`).
 
 ```nft
 #!/usr/sbin/nft -f
 
+# Managed by Ansible - do not edit by hand.
+# Source of truth: inventory vars for traefik + group_vars/all/network.yml
+
 flush ruleset
 
-define VPS_WG        = 10.0.0.1
+define VPS_WG_IP     = 10.0.0.1
+define VPN_NET       = 10.8.0.0/24
 
 define MGMT_NET      = 192.168.10.0/24
+define INFRA_NET     = 192.168.20.0/24
 define TRUSTED_NET   = 192.168.30.0/24
 define SERVICES_NET  = 192.168.50.0/24
 define IOT_NET       = 192.168.60.0/24
 
-define VPN_NET       = 10.8.0.0/24
-
-define MONITORING_IP = 192.168.50.21
 define HOMEPAGE_IP   = 192.168.20.20
+define MONITORING_IP = 192.168.50.21
 
 table inet filter {
     chain input {
@@ -186,10 +193,10 @@ table inet filter {
         tcp dport 22 ip saddr { $MGMT_NET, $VPN_NET } accept
 
         # HTTPS from internal VLANs via split-horizon DNS (returns 192.168.40.11)
-        iifname "eth0" tcp dport 443 ip saddr { $MGMT_NET, $TRUSTED_NET, $SERVICES_NET, $IOT_NET, $VPN_NET } accept
+        iifname "eth0" tcp dport 443 ip saddr { $MGMT_NET, $INFRA_NET, $TRUSTED_NET, $SERVICES_NET, $IOT_NET, $VPN_NET } accept
 
         # HTTPS through wg0 from VPS (10.0.0.1) - public traffic with PROXY-protocol
-        iifname "wg0" tcp dport 443 ip saddr $VPS_WG accept
+        iifname "wg0" tcp dport 443 ip saddr $VPS_WG_IP accept
 
         # Internal Traefik API - only from Homepage
         iifname "eth0" tcp dport 8079 ip saddr $HOMEPAGE_IP accept
@@ -233,7 +240,7 @@ CrowdSec engine работает на Traefik LXC рядом с Traefik; bouncer
 
 ### 8.3. Нюансы
 
-LAPI слушает только `127.0.0.1:8080`. Bouncer в режиме `stream` раз в 60 сек пуллит из LAPI полный список банов и держит кэш в памяти. При недоступности LAPI работает с последним кэшем: ранее забаненные остаются, новые не появляются до восстановления engine. Явного fail-closed (`defaultDecision: block`) у плагина нет — при длительном downtime новые атаки не фильтруются; частично страхует `Restart=always` в systemd (рестарт через 60 сек).
+LAPI слушает только `127.0.0.1:8080`. Bouncer в режиме `stream` раз в 60 сек (`updateIntervalSeconds: 60`) пуллит из LAPI полный список банов и держит кэш в памяти. `defaultDecisionSeconds: 14400` — длительность решения (4 часа), которую плагин применяет, если сам ответ LAPI её не передаёт. При недоступности LAPI работает с последним кэшем: ранее забаненные остаются, новые не появляются до восстановления engine. Явного fail-closed (`defaultDecision: block`) у плагина нет — при длительном downtime новые атаки не фильтруются; частично страхует `Restart=always` в systemd (рестарт через 60 сек).
 
 ### 8.4. Метрики
 
@@ -246,6 +253,8 @@ CrowdSec engine отдаёт Prometheus-метрики на `192.168.40.11:6060`
 ## 10. Резервное копирование
 
 Только PBS-снапшот всего LXC в составе общего ежедневного pve-задания. Критичного point-in-time состояния у Traefik нет; конфиги (`/etc/traefik/`, `/etc/nftables.conf`, `/etc/wireguard/wg0.conf`) маленькие, статичные и восстанавливаются вместе с LXC из PBS. См. `06-backup.md`.
+
+Отдельно от PBS: `/etc/traefik` — собственный git-репозиторий (`github.com/roman-kvasnikov/homelab-traefik`, раздел 2), даёт независимую от PBS историю изменений динамических конфигов и роутеров. Секреты (`.env`, `acme.json`, сертификаты) туда не попадают, при восстановлении из голого git-клона их пришлось бы завести заново.
 
 ## 11. Зависимости
 
