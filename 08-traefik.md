@@ -207,7 +207,7 @@ table inet filter {
         # Prometheus metrics for CrowdSec - Monitoring (Prometheus)
         iifname "eth0" tcp dport 6060 ip saddr $MONITORING_IP accept
 
-	      # Everything else falls into policy drop
+        # Everything else falls into policy drop
     }
 
     chain forward {
