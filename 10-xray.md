@@ -30,7 +30,7 @@ Forward-прокси:
 
 ## 2. Конфигурация Xray
 
-Конфиг — `/usr/local/etc/xray/config.json`. Ключевые блоки.
+Конфиг — `/usr/local/etc/xray/config.json`. **Файл не редактируется руками** — раз в сутки его полностью перезаписывает `xray-sync-config.sh` (`/usr/local/bin/`, таймер `xray-sync-config.timer`: `OnCalendar=daily`, `RandomizedDelaySec=1h`). Скрипт тянет актуальный конфиг с Remnawave-подписки (`sub.be-free.online` — self-hosted панель, см. Be-Free.Online VM в SERVICES, `03-network.md`); если ответ — массив профилей, выбирает элемент по совпадению VLESS-outbound (`vnext` адрес `ee.be-free.online:443` — так выбор не путается с Hysteria2-профилем на том же порту); проверяет кандидата (`xray run -test -config ...`) и только после успешной проверки атомарно (`mv`) подменяет файл и рестартует `xray.service`. Любые ручные правки `config.json` переживут максимум до ближайшего запуска таймера — менять маршрутизацию и outbounds нужно на стороне Remnawave-подписки, а не на VM. Ниже — ключевые блоки на момент проверки.
 
 **Outbounds.** Основной — `proxy` (VLESS + REALITY на зарубежный сервер `ee.be-free.online:443`, транспорт xhttp, fingerprint firefox). Служебные — `direct` (freedom) и `reject` (blackhole).
 
@@ -45,6 +45,8 @@ Forward-прокси:
 - `transparent` — dokodemo-door на `12345`, `network: tcp`, `followRedirect: true`, sniffing (`http`, `tls`) с `routeOnly`. Принимает redirected-трафик телевизоров. **Без** tproxy-sockopt — используется REDIRECT-схема (см. раздел 4), а не TPROXY.
 
 Все три inbound прогоняются через единый routing-блок — логика проксирования одна для forward-прокси и для прозрачного трафика.
+
+**Geodata.** `geoip.dat`/`geosite.dat` (`/usr/local/share/xray/`, это же `XRAY_LOCATION_ASSET`, откуда их читает Xray) обновляются отдельным таймером `xray-geodata-update.timer` (тоже `daily` + `RandomizedDelaySec=1h`): `xray-geodata-update.sh` вызывает официальный установщик `Xray-install` (`install-geodata`) и рестартует `xray.service`. От актуальности этих баз напрямую зависит точность `geoip:ru`/`geosite:category-ru` и всей российской ветки routing выше.
 
 ## 3. Потребители forward-прокси
 
@@ -175,11 +177,14 @@ net.ipv4.conf.default.rp_filter=0
 
 ## 7. Автозапуск
 
-Всё поднимается при старте VM без ручных действий: Xray (`systemctl enable xray`), nftables (`nftables.service` enabled, грузит `/etc/nftables.conf` с nat-таблицей), sysctl (из `/etc/sysctl.d/`). Policy-routing и таблицы маршрутизации не используются (это было только для TPROXY), поэтому после перезагрузки ничего добавлять руками не нужно.
+Всё поднимается при старте VM без ручных действий: Xray (`systemctl enable xray`), nftables (`nftables.service` enabled, грузит `/etc/nftables.conf` с nat-таблицей), sysctl (из `/etc/sysctl.d/`), плюс два таймера синхронизации — `xray-sync-config.timer` и `xray-geodata-update.timer` (раздел 2), оба `enabled`. Policy-routing и таблицы маршрутизации не используются (это было только для TPROXY), поэтому после перезагрузки ничего добавлять руками не нужно.
+
+`xray.service` — юнит от официального установщика Xray-core, не кастомный: `User=nobody`, `CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE` (только эти два, не root), `NoNewPrivileges=true`. Даже на VM, выбранной ради доступа к сетевому стеку ядра (раздел intro), сам процесс Xray работает без привилегий, а не от root. Установщик заодно создаёт шаблонный `xray@.service` (читает `/usr/local/etc/xray/%i.json`) — здесь не используется, вся конфигурация идёт через единственный `xray.service` + `config.json`.
 
 ## 8. Зависимости
 
 - **Зарубежный VLESS-сервер** (`ee.be-free.online`) — outbound-узел, через него идёт проксируемый трафик. Недоступность сервера ломает гео-обход (но `direct`-трафик работает).
+- **Remnawave-подписка** (`sub.be-free.online`) — источник `config.json` (раздел 2), синк раз в сутки. Недоступность подписки или невалидный ответ не ломает текущий Xray: `xray-sync-config.sh` проверяет кандидата (`xray run -test`) до замены живого файла и завершается с ошибкой раньше — старый рабочий конфиг остаётся как есть.
 - **OPNsense** — gateway `XRAY_GW`, policy-route и блок QUIC для телевизоров; маршрутизация INFRA.
 - **Медиастек в SERVICES** — потребитель forward-прокси (Jellyseerr и \*arr через `10809`).
 - **Traefik / CrowdSec (`192.168.40.11`)** — потребитель forward-прокси (`10809`) для namecheap-ACME и CAPI-синхронизации (см. `08-traefik.md`).
