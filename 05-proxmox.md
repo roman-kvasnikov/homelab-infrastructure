@@ -42,18 +42,18 @@ CTID/VMID на PVE совпадает с последним октетом ад�
 
 | ID  | Имя              | Тип | VLAN           | Адрес                   | RAM  | Назначение                        |
 | :-- | :--------------- | :-- | :------------- | :---------------------- | :--- | :-------------------------------- |
-| 101 | OPNsense         | VM  | WAN + все VLAN | шлюз `.1` в каждом VLAN | 6 GB | Маршрутизатор, firewall, DHCP/DNS |
-| 102 | OmadaController  | LXC | MGMT (10)      | `192.168.10.31`         | 4 GB | Контроллер коммутатора TP-Link    |
-| 103 | AmneziaWG        | LXC | INFRA (20)     | `192.168.20.11`         | 512 MB | VPN удалённого доступа          |
-| 104 | Xray             | VM  | INFRA (20)     | `192.168.20.12`         | 1 GB | Прокси гео-обхода                 |
+| 101 | opnsense         | VM  | WAN + все VLAN | шлюз `.1` в каждом VLAN | 6 GB | Маршрутизатор, firewall, DHCP/DNS |
+| 102 | omada            | LXC | MGMT (10)      | `192.168.10.31`         | 4 GB | Контроллер коммутатора TP-Link    |
+| 103 | amneziawg        | LXC | INFRA (20)     | `192.168.20.11`         | 512 MB | VPN удалённого доступа          |
+| 104 | xray             | VM  | INFRA (20)     | `192.168.20.12`         | 1 GB | Прокси гео-обхода                 |
 
-**OPNsense (101)** — `net0` → `vmbr0` (WAN), `net1` → `vmbr1` (LAN-транк, VLAN-интерфейсы внутри VM), CPU type `host`, virtio-сеть. Детали — в `03-network.md` и `04-firewall.md`.
+**opnsense (101)** — `net0` → `vmbr0` (WAN), `net1` → `vmbr1` (LAN-транк, VLAN-интерфейсы внутри VM), CPU type `host`, virtio-сеть. Детали — в `03-network.md` и `04-firewall.md`.
 
-**OmadaController (102)** — контроллер управляемого коммутатора TP-Link, интерфейс в MGMT (`tag=10`).
+**omada (102)** — контроллер управляемого коммутатора TP-Link, интерфейс в MGMT (`tag=10`).
 
-**AmneziaWG (103)** — обфусцированный VPN-сервер удалённого доступа. Unprivileged LXC с пробросом TUN-устройства (`lxc.cgroup2.devices.allow: c 10:200 rwm` и bind-mount `/dev/net/tun`). Детали — в `09-amneziawg.md`.
+**amneziawg (103)** — обфусцированный VPN-сервер удалённого доступа. Unprivileged LXC с пробросом TUN-устройства (`lxc.cgroup2.devices.allow: c 10:200 rwm` и bind-mount `/dev/net/tun`). Детали — в `09-amneziawg.md`.
 
-**Xray (104)** — прокси для гео-обхода и прозрачного проксирования. Детали — в `10-xray.md`.
+**xray (104)** — прокси для гео-обхода и прозрачного проксирования. CPU type `x86-64-v2-AES`, диск на `local-lvm` с `discard=on,ssd=1`. Детали — в `10-xray.md`.
 
 ---
 
@@ -63,7 +63,7 @@ CTID/VMID на PVE совпадает с последним октетом ад�
 
 ### Сеть хоста
 
-Единственный VLAN-aware мост `vmbr0` (`bridge-vlan-aware yes`, `bridge-vids 2-4094`) с портами `nic0` и `nic1`. Рабочий линк — `nic0`, подключён транком в порт 5 коммутатора; на нём включён Wake-on-LAN (`ethtool -s nic0 wol g`). `nic1` входит в мост, но кабель в него не подключён.
+Единственный VLAN-aware мост `vmbr0` (`bridge-vlan-aware yes`, `bridge-vids 2-4094`) с портами `nic0` и `nic1`. Оба порта намеренно включены в мост, чтобы транк из порта 5 коммутатора можно было подключать в любой из них; подключается всегда только один кабель — второй линк при `bridge-stp off` образовал бы петлю. На `nic0` включён Wake-on-LAN (`ethtool -s nic0 wol g`).
 
 Адрес хоста `192.168.10.12/24` (шлюз `192.168.10.1`) назначен прямо на `vmbr0`: MGMT приходит на порт native. Поэтому гости в MGMT подключаются без `tag=`, гости в остальных сегментах — с тегом своего VLAN.
 
@@ -71,7 +71,7 @@ CTID/VMID на PVE совпадает с последним октетом ад�
 
 | ID  | Имя            | Тип | VLAN          | Адрес           | RAM    | Назначение                                        |
 | :-- | :------------- | :-- | :------------ | :-------------- | :----- | :------------------------------------------------ |
-| 199 | mgmt           | LXC | MGMT (10)     | `192.168.10.99` | 2 GB   | Ansible control node (`16-ansible.md`)            |
+| 199 | mgmt           | LXC | MGMT (10)     | `192.168.10.99` | 2 GB   | Управляющий узел инфраструктуры: Ansible, AI-агент (`16-ansible.md`) |
 | 220 | homepage       | LXC | INFRA (20)    | `192.168.20.20` | 1 GB   | Дашборд Homepage                                  |
 | 411 | traefik        | LXC | DMZ (40)      | `192.168.40.11` | 1 GB   | Reverse-proxy + CrowdSec (`08-traefik.md`)        |
 | 511 | vaultwarden    | LXC | SERVICES (50) | `192.168.50.11` | 512 MB | Менеджер паролей (`12-vaultwarden.md`)            |
@@ -91,14 +91,14 @@ CTID/VMID на PVE совпадает с последним октетом ад�
 | 545 | forgejo        | LXC | SERVICES (50) | `192.168.50.45` | 2 GB   | Self-hosted Git                                   |
 | 580 | yandex-disk    | LXC | SERVICES (50) | `192.168.50.80` | 512 MB | Синхронизация Яндекс.Диска (Docker-in-LXC)        |
 | 590 | postgres       | LXC | SERVICES (50) | `192.168.50.90` | 2 GB   | Общий PostgreSQL и Redis                          |
-| 540 | Dev            | VM  | SERVICES (50) | `192.168.50.40` | 4 GB   | Среда разработки                                  |
-| 550 | Be-Free.Online | VM  | SERVICES (50) | `192.168.50.50` | 4 GB   | Панель Remnawave VPN-сервиса                      |
-| 570 | Hermes         | VM  | SERVICES (50) | `192.168.50.70` | 4 GB   | AI-агент                                          |
-| 571 | Home-Assistant | VM  | SERVICES (50) | `192.168.50.71` | 2 GB   | Home Assistant                                    |
+| 540 | dev            | VM  | SERVICES (50) | `192.168.50.40` | 4 GB   | Среда разработки                                  |
+| 550 | be-free-online | VM  | SERVICES (50) | `192.168.50.50` | 4 GB   | Панель Remnawave VPN-сервиса                      |
+| 570 | hermes         | VM  | SERVICES (50) | `192.168.50.70` | 4 GB   | AI-агент                                          |
+| 571 | home-assistant | VM  | SERVICES (50) | `192.168.50.71` | 2 GB   | Home Assistant                                    |
 
-Features контейнеров: нативные LXC — `nesting=1`; Docker-in-LXC organizer, immich, frigate, onlyoffice, yandex-disk — `nesting=1,keyctl=1`; open-webui и tdarr (тоже Docker) — `nesting=1`; forgejo — без features.
+Features контейнеров по базлайну `02-conventions.md`: нативные LXC — `nesting=1`; Docker-in-LXC (organizer, immich, frigate, onlyoffice, open-webui, tdarr, yandex-disk) — `nesting=1,keyctl=1`.
 
-VM используют CPU type `x86-64-v2-AES` и virtio-сеть; диски — на `local-zfs`.
+VM используют CPU type `x86-64-v2-AES`, virtio-сеть и диски на `local-zfs` с `discard=on,ssd=1` — TRIM из гостя освобождает блоки в zvol.
 
 ---
 
@@ -133,13 +133,13 @@ HDD:
 
 | Пул        | compression | atime |
 | :--------- | :---------- | :---- |
-| `rpool`    | `on`        | `on`  |
+| `rpool`    | `on`        | `off` |
 | `zdata`    | `lz4`       | `off` |
 | `zmedia`   | `off`       | `off` |
 | `zfrigate` | `lz4`       | `off` |
-| `zssd`     | `lz4`       | `on`  |
+| `zssd`     | `lz4`       | `off` |
 
-На `zmedia` сжатие отключено — медиафайлы уже сжаты.
+`atime=off` на всех пулах: ни один сервис не опирается на время доступа, а обновление метаданных при каждом чтении — лишний IO и износ SSD. На `zmedia` сжатие отключено — медиафайлы уже сжаты. Все пулы импортированы по стабильным идентификаторам `/dev/disk/by-id`, а не по именам `sdX`, которые могут меняться при смене порядка дисков.
 
 **ZFS ARC ограничен 16 GiB** (`/etc/modprobe.d/zfs.conf`: `options zfs zfs_arc_max=17179869184`, применено в initramfs) — баланс между кэшем файловой системы и памятью гостей на хосте с 62 GiB RAM без swap.
 
@@ -209,17 +209,15 @@ HDD:
 
 | order | PVE-Mini                        | PVE                                                     |
 | :---- | :------------------------------ | :------------------------------------------------------ |
-| 1     | OPNsense (`up=60`, `down=120`)  | postgres (`up=15`)                                      |
-| 2     | OmadaController, AmneziaWG, Xray | traefik (`up=5`)                                       |
+| 1     | opnsense (`up=60`, `down=120`)  | postgres (`up=15`)                                      |
+| 2     | omada, amneziawg, xray          | traefik (`up=5`)                                       |
 | 3     | —                               | authelia (`up=10`)                                      |
 | 4     | —                               | mgmt                                                    |
-| 5     | —                               | organizer, immich, shares, open-webui, tdarr, forgejo   |
-| 6     | —                               | vaultwarden, monitoring, gotify, onlyoffice, Dev        |
+| 5     | —                               | organizer, immich, shares, open-webui, tdarr, forgejo, home-assistant |
+| 6     | —                               | vaultwarden, monitoring, gotify, onlyoffice, dev        |
 | 7     | —                               | jellyfin, arr, qbittorrent, frigate                     |
 | 8     | —                               | homepage, yandex-disk                                   |
-| 9     | —                               | Be-Free.Online                                          |
-
-Hermes и Home-Assistant без `startup` — Proxmox запускает их после всех гостей с заданным порядком.
+| 9     | —                               | be-free-online, hermes                                  |
 
 ---
 
@@ -243,10 +241,18 @@ Hermes и Home-Assistant без `startup` — Proxmox запускает их п
 
 Ключевое отличие от сервисных контейнеров касается цепочки `forward`. На гипервизорах она оставлена `policy accept`: они несут гостей с bridged-трафиком (на PVE-Mini через мосты проходит весь трафик OPNsense — WAN, DNS, DHCP, inter-VLAN), и `policy drop` на `forward` оборвал бы транзит гостей. На PBS гостей нет, поэтому `forward` остаётся `drop`. Host-firewall защищает только management-плоскость самого хоста (`input`), не вмешиваясь в трафик гостей.
 
-Что разрешено во `input` сверх общего базлайна (SSH из MGMT и VPN, loopback, conntrack, базовые ICMP):
+Что разрешено во `input` сверх общего базлайна (loopback, conntrack, базовые ICMP):
 
-- **PVE-Mini** (`192.168.10.11`): `8006` (web/API) из MGMT, VPN, Traefik и Monitoring (pve-exporter); `9100` (node_exporter) от Monitoring.
-- **PVE** (`192.168.10.12`): `8006` из MGMT, VPN, Traefik и Monitoring; `3493` (NUT upsd) от вторичных клиентов PVE-Mini и PBS и от PeaNUT в Monitoring; `9100` от Monitoring.
-- **PBS** (`192.168.10.15`): `8007` (web/API) из MGMT, VPN, Traefik и Monitoring (pbs-exporter); `9100` от Monitoring.
+| Порт             | Назначение         | PVE-Mini | PVE | PBS | Источники                                                    |
+| :--------------- | :----------------- | :------- | :-- | :-- | :----------------------------------------------------------- |
+| `22/tcp`         | SSH                | ✓        | ✓   | ✓   | ноутбук в MGMT (`192.168.10.50`), ноутбук через VPN (`10.8.0.2`), mgmt (`192.168.10.99`) |
+| `8006/tcp`       | Web/API Proxmox VE | ✓        | ✓   | —   | MGMT, VPN, Traefik, Homepage, Monitoring (pve-exporter)      |
+| `8007/tcp`       | Web/API PBS        | —        | —   | ✓   | MGMT, VPN, Traefik, Homepage, Monitoring (pbs-exporter)      |
+| `3493/tcp`       | NUT upsd           | —        | ✓   | —   | PVE-Mini, PBS (вторичные клиенты), Monitoring (PeaNUT)       |
+| `9100/tcp`       | node_exporter      | ✓        | ✓   | ✓   | Monitoring                                                   |
 
-Файловый доступ в сети обеспечивает Samba в контейнере shares (`192.168.50.36`); NFS на хостах не используется. Встроенный `pve-firewall` выключен — фильтрацию несёт `nftables.service`, и включение pve-firewall параллельно создало бы две конкурирующие системы правил.
+SSH открыт не сегментам целиком, а конкретным управляющим узлам: рабочему ноутбуку (из MGMT и через VPN) и управляющему LXC mgmt, с которого работает Ansible.
+
+Файловый доступ в сети обеспечивает Samba в контейнере shares (`192.168.50.36`); NFS на хостах не используется.
+
+Встроенный firewall Proxmox не используется: `pve-firewall.service` работает штатно, но на уровне Datacenter firewall выключен (`pve-firewall status` → `disabled/running`), поэтому собственных правил iptables Proxmox не генерирует. Фильтрацию на хостах несёт только `nftables.service`, на гостях — их собственный nftables, между сегментами — OPNsense. NIC гостей подключены к мостам без флага `firewall=1`: при выключенном firewall Datacenter он лишь вставлял бы в путь трафика промежуточные мосты `fwbr`/`fwpr`/`fwln`.
