@@ -118,6 +118,8 @@ table inet filter {
 
 Сервисы, работающие нативным бинарником под systemd, запускаются от выделенного системного юзера с единым набором sandbox-директив. Набор ограничивает права процесса на уровне ядра: запрет эскалации, read-only файловая система вне явно разрешённых путей, изоляция `/tmp`, `/home`, устройств и kernel-интерфейсов.
 
+Набор разделён на два уровня. **Базовый** получает каждый нативный сервис — он усилен, но заведомо не ломает типовые демоны. **Усиленный** добавляется поверх базового для сервисов, хранящих секреты, учётки или код (IdP, Vaultwarden, Forgejo). Директивы-ломатели в набор не входят и применяются только точечно с проверкой (см. ниже).
+
 ### Базовый набор
 
 ```ini
@@ -128,34 +130,73 @@ Group=<service>
 Restart=always
 RestartSec=10
 
+# --- Привилегии ---
 NoNewPrivileges=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+
+# --- Файловая система ---
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
+ReadWritePaths=/var/lib/<service>
+
+# --- Ядро и система ---
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true
 ProtectControlGroups=true
-RestrictNamespaces=true
-LockPersonality=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
 
-ReadWritePaths=/var/lib/<service>
+# --- Namespaces / IPC / адресные семейства ---
+RestrictNamespaces=true
+RemoveIPC=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+# --- Syscalls ---
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
 ```
 
 `ProtectSystem=strict` делает всю файловую систему read-only, кроме путей в `ReadWritePaths` — обычно это единственный `/var/lib/<service>`, куда сервис пишет БД и состояние. Запись в `/var/log` при этом запрещена, поэтому логи идут в journald (`journalctl -u <service>`), файлового логирования нет.
 
+`SystemCallFilter=@system-service` разрешает только курируемый systemd набор syscall'ов, типовой для демонов; на обычных сервисах ломает редко.
+
 ### Усиленный набор
 
-Для сервисов с повышенными требованиями (например, IdP, хранящий все аутентификации) базовый набор дополняется:
+Добавляется поверх базового для сервисов с повышенными требованиями (хранят секреты, учётки, код).
 
 ```ini
 PrivateUsers=true
 CapabilityBoundingSet=
-SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
 ```
 
-`CapabilityBoundingSet=` (пустой) убирает все Linux capabilities. `SystemCallFilter=@system-service` разрешает только типовой для сервисов набор syscall'ов. Применение усиленного набора отмечается в файле конкретного сервиса.
+Строки `SystemCallFilter` аддитивны: базовая задаёт allow-list `@system-service`, усиленная добавляет deny-вычитание `~@privileged @resources` — усиленный сервис получает обе. `CapabilityBoundingSet=` (пустой) убирает все Linux capabilities. `PrivateUsers=true` изолирует user namespace сервиса; в нативных LXC он работает благодаря `nesting=1` (см. раздел 1).
+
+Применение усиленного набора отмечается в файле конкретного сервиса.
+
+### Пояснения к отдельным директивам
+
+`RestrictAddressFamilies` включает `AF_NETLINK` намеренно: Go-бинарники (Forgejo и др.) через netlink перечисляют сетевые интерфейсы, без него возможны отказы. Экзотические семейства (`AF_PACKET`, `AF_BLUETOOTH` и т.п.) при этом остаются закрыты.
+
+`ProtectProc=invisible` безопасен в модели «один сервис на LXC». Исключение — Monitoring/node-exporter LXC, которому нужно видеть чужие процессы: он переопределяет директиву в своём файле.
+
+`CapabilityBoundingSet=` (пустой) корректен только когда сервис не биндит порт ниже 1024. Сервису на привилегированном порту нужно переопределение в его файле: `CapabilityBoundingSet=CAP_NET_BIND_SERVICE` плюс `AmbientCapabilities=CAP_NET_BIND_SERVICE`.
+
+### Сознательно не входят
+
+Частые ломатели — не в наборе, добавляются только точечно и с проверкой на конкретном сервисе.
+
+`MemoryDenyWriteExecute` ломает cgo/JIT, включая вкомпилированный через cgo SQLite (как у Forgejo). `ProcSubset=pid` ломает сервисы, читающие `/proc/sys`, `/proc/meminfo` и подобное.
+
+### Переопределения через drop-in
+
+Отклонения конкретного сервиса от набора оформляются drop-in'ом `/etc/systemd/system/<service>.service.d/hardening.conf`, а не правкой скачанного или дистрибутивного unit-файла — так изменения переживают обновление юнита. В drop-in попадает и выбор усиленного набора, и любые релаксации (например, переопределение `CapabilityBoundingSet` под привилегированный порт).
 
 ### Зависимости и автозапуск
 
