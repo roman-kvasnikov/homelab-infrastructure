@@ -24,35 +24,51 @@ description: |
 
 ### Docker-in-LXC
 
-Для сервисов без вменяемой нативной установки. Features: **`nesting=1,keyctl=1`**. В `/etc/docker/daemon.json` задаётся `default-address-pools` из диапазона `10.200.0.0/16`, чтобы Docker-сети не пересекались с подсетями homelab.
+Для сервисов без вменяемой нативной установки. Features: **`nesting=1,keyctl=1`**. В `/etc/docker/daemon.json` задаётся `default-address-pools` из диапазона `10.200.0.0/16` (подсети `/24`), чтобы Docker-сети не пересекались с подсетями homelab:
+
+```json
+{
+  "default-address-pools": [
+    {"base": "10.200.0.0/16", "size": 24}
+  ]
+}
+```
+
+Порты контейнеров публикуются только на адресе LXC (`192.168.50.xx:<port>:<port>`), а не на `0.0.0.0`. Фильтрация опубликованных портов описана в разделе 2.
 
 ### Сеть
 
-Интерфейс контейнера — тегированный VLAN на VLAN-aware мосту гипервизора, VLAN выбирается по роли сервиса (`03-network.md`). Адрес статический, шлюз и DNS — OPNsense в соответствующем VLAN (`192.168.<vlan>.1`).
+Интерфейс контейнера подключается к VLAN-aware мосту гипервизора с тегом VLAN, выбранного по роли сервиса (`03-network.md`); исключение — гости в MGMT на PVE, где MGMT приходит native и тег не ставится. Флаг `firewall=1` на интерфейсе не используется (`05-proxmox.md`). Адрес статический и выводится из ID гостя (`540` → `192.168.50.40`), шлюз и DNS — OPNsense в соответствующем VLAN (`192.168.<vlan>.1`).
 
 Сервис слушает только на своём адресе, не на `0.0.0.0`.
 
 ### Хранилище
 
-Rootfs и данные сервиса лежат на ZFS-пуле гипервизора. Данные, которые нужно бэкапить, размещаются на Proxmox-managed volume (раздел 5). Крупные медиа и записи — на bind-mount датасета, вне vzdump.
+Rootfs лежит на `local-zfs`. Данные, которые нужно бэкапить, размещаются на Proxmox-managed volume (раздел 5): малое критичное состояние — на `local-zfs`, крупные ценные данные — на `zdata`. Крупные восстановимые медиа и записи — на bind-mount датасета, вне vzdump. Принцип размещения — в `05-proxmox.md`.
 
 ---
 
 ## 2. Шаблон nftables
 
-Фильтрация на всех LXC построена по whitelist-принципу: `policy drop` на `input` и `forward`, разрешено только явно перечисленное. Исходящий трафик не ограничивается. Конфиг — `/etc/nftables.conf`, загружается `nftables.service` при старте контейнера (`systemctl enable nftables`).
+Фильтрация на всех LXC и VM построена по whitelist-принципу: `policy drop` на `input` и `forward`, разрешено только явно перечисленное. Исходящий трафик не ограничивается. Конфиг `/etc/nftables.conf` генерируется ролью Ansible `nftables` (`16-ansible.md`) и загружается `nftables.service` при старте. Ручные правки не делаются — файл перезаписывается при следующей раскатке.
 
-Стандартный сервис принимает подключения к своему порту **только от Traefik**, SSH — только из **MGMT** и **VPN**. Между сервисами в шаблоне различается одна строка — порт сервиса.
+Блок `define` в каждом конфиге одинаков: весь адресный инвентарь из `group_vars/all/network.yml`. Имена строятся как `<СЕГМЕНТ>_NET` для подсети и `<СЕГМЕНТ>_<ИМЯ>_IP` для узла (`MGMT_NET`, `DMZ_TRAEFIK_IP`, `SERVICES_POSTGRES_IP`). Правила хоста ссылаются только на эти имена.
+
+Стандартный сервис принимает подключения к своему порту от **Traefik**, SSH — от трёх управляющих узлов: административного ноутбука (из MGMT и через VPN) и управляющего LXC mgmt. Между сервисами различаются только строки правил сервиса.
 
 ```nft
 #!/usr/sbin/nft -f
 
+# Managed by Ansible - do not edit by hand.
+# Source of truth: inventory vars for <service> + group_vars/all/network.yml
+
 flush ruleset
 
-define MGMT_NET   = 192.168.10.0/24
-define VPN_NET    = 10.8.0.0/24
-
-define TRAEFIK_IP = 192.168.40.11
+define VPN_MGMT_NOTEBOOK_IP = 10.8.0.2
+define MGMT_NOTEBOOK_IP = 192.168.10.50
+define MGMT_MGMT_IP    = 192.168.10.99
+define DMZ_TRAEFIK_IP  = 192.168.40.11
+# ... full address inventory
 
 table inet filter {
     chain input {
@@ -85,11 +101,13 @@ table inet filter {
             nd-neighbor-advert
         } accept
 
-        # SSH - only from MGMT and VPN
-        tcp dport 22 ip saddr { $MGMT_NET, $VPN_NET } accept
+        # SSH connections
+        tcp dport 22 ip saddr { $MGMT_NOTEBOOK_IP, $VPN_MGMT_NOTEBOOK_IP, $MGMT_MGMT_IP } accept
 
-        # Service - only from Traefik
-        tcp dport <SERVICE_PORT> ip saddr $TRAEFIK_IP accept
+        # <Service> WebUI from Traefik
+        tcp dport <SERVICE_PORT> ip saddr $DMZ_TRAEFIK_IP accept
+
+        # Everything else falls into policy drop
     }
 
     chain forward {
@@ -102,13 +120,38 @@ table inet filter {
 }
 ```
 
-Проверка после применения: `nft -c -f /etc/nftables.conf` перед загрузкой, `nft list ruleset` после.
+Проверка на хосте после раскатки: `nft list ruleset`.
 
 ### Расширение шаблона
 
-Сервис, которому нужны дополнительные источники или порты, добавляет свои `accept`-строки в `input`. Каждое такое расширение описывается в файле сервиса с обоснованием.
+Сервис, которому нужны дополнительные источники или порты, получает свои правила в `nft_service_rules` своего host_vars: каждое правило — порт, протокол, источник и комментарий, рендерится отдельной `accept`-строкой в `input`. Дополнительный источник добавляется только под реальный поток (например, Homepage для виджета) и описывается в файле сервиса с обоснованием.
 
-В Docker-in-LXC трафик контейнеров проходит через цепочку `forward`, поэтому шаблон для таких LXC расширяется правилами для Docker-мостов. После перезагрузки nftables нужно перезапускать Docker (`systemctl restart docker`) — `flush ruleset` удаляет цепочки, созданные Docker.
+Хосты, которые маршрутизируют трафик (AmneziaWG, Xray) или несут гостей (гипервизоры), переопределяют политику `forward` и добавляют собственные правила; это описано в их документах.
+
+### Docker-in-LXC
+
+Опубликованный порт Docker принимает трафик через DNAT: пакет проходит `prerouting` → `forward` → контейнер и цепочку `input` не пересекает. Поэтому на Docker-хостах (`nft_docker_host: true`) whitelist дублируется в `forward`, а сама цепочка остаётся в `policy drop`:
+
+```nft
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+
+        # Conntrack
+        ct state established,related accept
+        ct state invalid drop
+
+        # Container egress (internet, DNS, backends)
+        iifname "docker0" accept
+        iifname "br-*" accept
+
+        # <Service> WebUI from Traefik (published port, pre-DNAT)
+        meta l4proto tcp ct status dnat ct original proto-dst <SERVICE_PORT> ip saddr $DMZ_TRAEFIK_IP accept
+    }
+```
+
+Каждое правило из `nft_service_rules` рендерится в обе цепочки: в `input` — по `dport`, в `forward` — по исходному порту до трансляции (`ct original proto-dst`) и только для DNAT-трафика (`ct status dnat`). Правило описывается в inventory один раз. Исходящий трафик контейнеров (интернет, DNS, PostgreSQL) разрешён по входному интерфейсу Docker-моста. Контейнеры с `network_mode: host` в `forward` не участвуют — их порты защищает `input`.
+
+`flush ruleset` удаляет NAT-цепочки, созданные Docker, а Docker пересоздаёт их только при старте демона, поэтому после каждой перезагрузки nftables на Docker-хосте роль перезапускает Docker.
 
 ---
 
@@ -189,7 +232,7 @@ systemd-analyze security <service>
 
 ## 4. Hardening SSH
 
-На всех хостах sshd ужесточается drop-in'ом `/etc/ssh/sshd_config.d/10-hardening.conf`. Основной `/etc/ssh/sshd_config` не изменяется.
+На всех хостах sshd ужесточается drop-in'ом `/etc/ssh/sshd_config.d/10-hardening.conf`, который раскатывает роль Ansible `ssh_hardening` (`16-ansible.md`). Основной `/etc/ssh/sshd_config` не изменяется.
 
 ```
 PermitRootLogin prohibit-password
@@ -238,9 +281,10 @@ LXC поднимается из PBS-снапшота. Для SQLite-сервис
 
 ## 6. Соглашения об именах
 
-- **kebab-case** — hostname, имена файлов, systemd-юнитов, storage ID, идентификаторы сервисов.
+- **kebab-case** — hostname, имена гостей Proxmox (LXC и VM), имена файлов, systemd-юнитов, storage ID, идентификаторы сервисов.
 - **snake_case** — переменные в bash-скриптах.
-- **UPPER_SNAKE_CASE** — ENV-константы и `define` в nftables.
+- **UPPER_SNAKE_CASE** — ENV-константы и `define` в nftables (`<СЕГМЕНТ>_<ИМЯ>_IP`, раздел 2).
+- **snake_case с суффиксом типа** — алиасы OPNsense (`traefik_lxc`, `dev_vm`, `pve_host`, `xray_ports`): дефис в именах алиасов недопустим (`04-firewall.md`).
 - Без type-префиксов: `vaultwarden`, а не `lxc-vaultwarden`.
 - Одно имя сервиса для всех связанных сущностей: hostname, юзер, юнит, директория данных, DNS-имя.
 
@@ -250,8 +294,9 @@ LXC поднимается из PBS-снапшота. Для SQLite-сервис
 
 ## 7. Общие зависимости сервисов
 
-Типовой сервисный LXC зависит от трёх внешних узлов. В файле сервиса перечисляются только дополнительные зависимости.
+Типовой сервисный LXC зависит от четырёх внешних узлов. В файле сервиса перечисляются только дополнительные зависимости.
 
 - **Traefik** (`192.168.40.11`, DMZ) — единственный источник запросов к порту сервиса.
 - **Unbound на OPNsense** (шлюз VLAN сервиса) — DNS, включая split-horizon `*.kvasok.xyz → 192.168.40.11`.
 - **PBS** (`192.168.10.15`, MGMT) — приёмник vzdump-снапшотов.
+- **mgmt** (`192.168.10.99`, MGMT) — управляющий узел: Ansible раскатывает nftables, SSH hardening и конфигурацию сервиса.
