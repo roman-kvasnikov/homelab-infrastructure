@@ -171,14 +171,17 @@ SystemCallFilter=@system-service
 Добавляется поверх базового для сервисов с повышенными требованиями (хранят секреты, учётки, код).
 
 ```ini
-PrivateUsers=true
 CapabilityBoundingSet=
 SystemCallFilter=~@privileged @resources
 ```
 
-Строки `SystemCallFilter` аддитивны: базовая задаёт allow-list `@system-service`, усиленная добавляет deny-вычитание `~@privileged @resources` — усиленный сервис получает обе. `CapabilityBoundingSet=` (пустой) убирает все Linux capabilities. `PrivateUsers=true` изолирует user namespace сервиса; в нативных LXC он работает благодаря `nesting=1` (см. раздел 1).
+Строки `SystemCallFilter` аддитивны: базовая задаёт allow-list `@system-service`, усиленная добавляет deny-вычитание `~@privileged @resources` — усиленный сервис получает обе. `CapabilityBoundingSet=` (пустой) убирает все Linux capabilities.
 
 Применение усиленного набора отмечается в файле конкретного сервиса.
+
+### PrivateUsers и unprivileged LXC
+
+`PrivateUsers=true` в усиленный набор не входит: он требует вложенного user namespace, а внутри unprivileged LXC его создание запрещено ядром — сервис падает на старте с `status=217/USER` («Failed to set up user namespacing: Permission denied»). `nesting=1` это не снимает: он даёт userns самому systemd контейнера, но не разрешает демону создать ещё один вложенный маппинг. Поскольку все сервисные LXC — unprivileged (раздел 1), директива в этой среде неприменима в принципе. Использовать её имеет смысл только на privileged LXC или bare-metal — тогда она добавляется точечно в drop-in конкретного сервиса.
 
 ### Пояснения к отдельным директивам
 
@@ -196,7 +199,9 @@ SystemCallFilter=~@privileged @resources
 
 ### Переопределения через drop-in
 
-Отклонения конкретного сервиса от набора оформляются drop-in'ом `/etc/systemd/system/<service>.service.d/hardening.conf`, а не правкой скачанного или дистрибутивного unit-файла — так изменения переживают обновление юнита. В drop-in попадает и выбор усиленного набора, и любые релаксации (например, переопределение `CapabilityBoundingSet` под привилегированный порт).
+Отклонения конкретного сервиса от набора оформляются drop-in'ом `/etc/systemd/system/<service>.service.d/hardening.conf`, а не правкой скачанного или дистрибутивного unit-файла — так изменения переживают обновление юнита. В drop-in попадает и выбор усиленного набора, и любые релаксации.
+
+Если основной unit-файл уже задаёт `User`/`Group`/`ExecStart`/`Restart` (как стоковый юнит Forgejo, работающий от юзера `git`), в drop-in эти ключи не дублируются — он несёт только sandbox-директивы, а systemd сливает его с основным юнитом. Проверить слитый результат: `systemctl cat <service>.service`.
 
 ### Зависимости и автозапуск
 
