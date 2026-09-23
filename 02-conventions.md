@@ -130,20 +130,20 @@ Group=<service>
 Restart=always
 RestartSec=10
 
-# --- Привилегии ---
+# --- Privileges ---
 NoNewPrivileges=true
 RestrictSUIDSGID=true
 RestrictRealtime=true
 LockPersonality=true
 
-# --- Файловая система ---
+# --- Filesystem ---
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
 ReadWritePaths=/var/lib/<service>
 
-# --- Ядро и система ---
+# --- Kernel / system ---
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true
@@ -152,7 +152,7 @@ ProtectClock=true
 ProtectHostname=true
 ProtectProc=invisible
 
-# --- Namespaces / IPC / адресные семейства ---
+# --- Namespaces / IPC / address families ---
 RestrictNamespaces=true
 RemoveIPC=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
