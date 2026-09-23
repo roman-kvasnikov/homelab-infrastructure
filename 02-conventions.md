@@ -1,48 +1,48 @@
 ---
 name: conventions
 description: |
-  Канонические соглашения и повторяющиеся шаблоны инфраструктуры homelab: базлайн LXC (нативный и Docker-in-LXC), шаблон nftables для сервисного контейнера, набор systemd-sandbox, hardening SSH, паттерн бэкапа данных сервиса через managed-volume + vzdump с SQLite-хуком, соглашения об именах. Сервисные документы ссылаются сюда вместо дублирования этих блоков.
+  Общие соглашения и шаблоны для развёртывания сервисов homelab: базлайн unprivileged LXC, шаблон nftables, единый systemd-sandbox, hardening SSH, паттерн бэкапа данных сервиса, соглашения об именах и общие зависимости. Сервисные документы ссылаются сюда и описывают только свою специфику.
 ---
 
 # Соглашения и шаблоны
 
-Этот документ — единый источник для повторяющихся конструкций инфраструктуры. Сервисные файлы (Vaultwarden, Authelia, Gotify, Monitoring и др.) не повторяют эти блоки, а ссылаются на соответствующий раздел здесь и описывают только специфику: имя, порт, конфиг, зависимости.
+Этот документ — единый источник для повторяющихся конструкций инфраструктуры. Сервисные файлы не дублируют эти блоки, а ссылаются на соответствующий раздел и описывают только специфику сервиса: имя, адрес, порт, конфиг, зависимости и отклонения от шаблона.
 
-Плейсхолдеры в шаблонах записаны в угловых скобках (`<SERVICE_PORT>`, `<service>`) и подставляются под конкретный сервис.
+Плейсхолдеры в шаблонах записаны в угловых скобках (`<service>`, `<SERVICE_PORT>`) и подставляются под конкретный сервис.
 
 ---
 
 ## 1. Базлайн LXC
 
-Все сервисные LXC — **unprivileged** (`unprivileged: 1`): root внутри маппится в nobody на хосте через user namespaces, эскалация до хоста невозможна. По способу запуска сервиса контейнеры делятся на два типа.
+Все сервисные LXC — **unprivileged** (`unprivileged: 1`): root внутри контейнера маппится на непривилегированный UID хоста через user namespaces.
+
+Один LXC — один сервис.
 
 ### Нативный LXC
 
-Сервис работает нативным бинарником под systemd. Из features включён только **`nesting=1`** — не для Docker, а для корректной работы systemd в Debian: современный systemd активно использует user namespaces для собственного sandbox'а юнитов (`PrivateUsers=`, `PrivateTmp=` и т.п.), и без `nesting=1` падают journald, tmpfiles-setup и часть служебных юнитов. Эскалации до хоста `nesting=1` в unprivileged-контейнере не даёт. `keyctl`, `mount=`, `mknod` не включаются.
+Сервис работает нативным бинарником под systemd. Features: **`nesting=1`** — нужен современному systemd для собственного sandbox'а юнитов (mount/UTS namespaces, `ProtectProc`, `PrivateTmp` и т.п.). Остальные features не включаются.
 
 ### Docker-in-LXC
 
-Сервисы, у которых нет вменяемой нативной установки (Immich, Frigate и подобные), работают в Docker внутри unprivileged LXC. Features — **`nesting=1,keyctl=1`** (`keyctl` нужен Docker для работы с ключами). В `/etc/docker/daemon.json` задаётся `default-address-pools` из приватного диапазона `10.200.0.0/16`, чтобы автоматически создаваемые Docker-сети не пересеклись с физическими подсетями homelab. Данные приложений и медиатеки монтируются в контейнер через mount points (см. раздел про хранилище в `05-proxmox.md`), внутри Docker пробрасываются в сервис как volume.
+Для сервисов без вменяемой нативной установки. Features: **`nesting=1,keyctl=1`**. В `/etc/docker/daemon.json` задаётся `default-address-pools` из диапазона `10.200.0.0/16`, чтобы Docker-сети не пересекались с подсетями homelab.
 
-### Общее для обоих типов
+### Сеть
 
-Диск лежит на ZFS-пуле гипервизора. Данные приложения, которые нужно бэкапить, размещаются на **Proxmox-managed volume** (`storage:SIZE`, попадает в vzdump); крупные медиа и записи — на **bind-mount** обычного датасета (не в vzdump). Hostpath-mounts под конфиги не используются.
+Интерфейс контейнера — тегированный VLAN на VLAN-aware мосту гипервизора, VLAN выбирается по роли сервиса (`03-network.md`). Адрес статический, шлюз и DNS — OPNsense в соответствующем VLAN (`192.168.<vlan>.1`).
 
-Сеть контейнера — тегированный VLAN-интерфейс на VLAN-aware мосту гипервизора (тег назначается по роли сервиса согласно схеме VLAN в `03-network.md`). Адрес статический либо резервируется в Kea DHCP по MAC; шлюз и DNS — адрес OPNsense в соответствующем VLAN (`192.168.<vlan>.1`).
+Сервис слушает только на своём адресе, не на `0.0.0.0`.
 
-Каждый сервис слушает **только на своём конкретном адресе**, не на `0.0.0.0` — loopback и прочие интерфейсы для сервиса недоступны. Прямой доступ к порту дополнительно ограничивается на уровне nftables (см. раздел 2).
+### Хранилище
+
+Rootfs и данные сервиса лежат на ZFS-пуле гипервизора. Данные, которые нужно бэкапить, размещаются на Proxmox-managed volume (раздел 5). Крупные медиа и записи — на bind-mount датасета, вне vzdump.
 
 ---
 
-## 2. Шаблон nftables для сервисного LXC
+## 2. Шаблон nftables
 
-Сетевая фильтрация на всех LXC построена по единому whitelist-подходу: `policy drop` на цепочках `input` и `forward`, разрешено только явно перечисленное, всё остальное молча отбрасывается. Исходящий трафик не ограничивается (`output` policy accept). Конфиг лежит в `/etc/nftables.conf` и загружается через `nftables.service` при старте контейнера.
+Фильтрация на всех LXC построена по whitelist-принципу: `policy drop` на `input` и `forward`, разрешено только явно перечисленное. Исходящий трафик не ограничивается. Конфиг — `/etc/nftables.conf`, загружается `nftables.service` при старте контейнера (`systemctl enable nftables`).
 
-### Стандартный сервисный контейнер
-
-Типовой сервис (Vaultwarden, Authelia, Gotify и подобные) принимает входящие **только от Traefik** — прямой доступ к порту из сети, минуя reverse-proxy с его middleware-цепочкой (CrowdSec, rate-limit, security headers), закрыт. SSH разрешён только из **MGMT** и через **VPN**.
-
-Разница между сервисами в этом шаблоне — ровно одна строка: порт сервиса (`<SERVICE_PORT>`). Всё остальное идентично.
+Стандартный сервис принимает подключения к своему порту **только от Traefik**, SSH — только из **MGMT** и **VPN**. Между сервисами в шаблоне различается одна строка — порт сервиса.
 
 ```nft
 #!/usr/sbin/nft -f
@@ -65,7 +65,7 @@ table inet filter {
         ct state established,related accept
         ct state invalid drop
 
-        # ICMPv4 - for ping and path MTU discovery
+        # ICMPv4 - ping and path MTU discovery
         ip protocol icmp icmp type {
             destination-unreachable,
             time-exceeded,
@@ -73,27 +73,23 @@ table inet filter {
             echo-request
         } accept
 
-        # ICMPv6 - for NDP
+        # ICMPv6 - ping, PMTUD and NDP
         ip6 nexthdr icmpv6 icmpv6 type {
             destination-unreachable,
             packet-too-big,
             time-exceeded,
             parameter-problem,
             echo-request,
-            echo-reply,
             nd-router-advert,
-            nd-router-solicit,
-            nd-neighbor-advert,
-            nd-neighbor-solicit
+            nd-neighbor-solicit,
+            nd-neighbor-advert
         } accept
 
-        # SSH - only from MGMT_NET and VPN_NET
+        # SSH - only from MGMT and VPN
         tcp dport 22 ip saddr { $MGMT_NET, $VPN_NET } accept
 
-        # Service only from Traefik
+        # Service - only from Traefik
         tcp dport <SERVICE_PORT> ip saddr $TRAEFIK_IP accept
-
-        # Everything else falls into policy drop
     }
 
     chain forward {
@@ -106,21 +102,19 @@ table inet filter {
 }
 ```
 
-Разрешено: loopback, ответные пакеты (conntrack established/related), базовые ICMPv4/ICMPv6 (ping и NDP), SSH (22) из `MGMT_NET` и `VPN_NET`, порт сервиса только с адреса Traefik. Прямой доступ к порту сервиса из других сегментов мимо Traefik закрыт — соединение не устанавливается, отдаётся timeout.
+Проверка после применения: `nft -c -f /etc/nftables.conf` перед загрузкой, `nft list ruleset` после.
 
-### Отклонения от шаблона
+### Расширение шаблона
 
-Сервисы, которым нужен доступ к порту не только от Traefik, добавляют дополнительные `accept`-строки. Каждое такое отклонение описывается в файле конкретного сервиса с обоснованием. Типовые случаи: открытие порта для Monitoring LXC (скрейп метрик), открытие UI для всей доверенной сети вместо только Traefik.
+Сервис, которому нужны дополнительные источники или порты, добавляет свои `accept`-строки в `input`. Каждое такое расширение описывается в файле сервиса с обоснованием.
+
+В Docker-in-LXC трафик контейнеров проходит через цепочку `forward`, поэтому шаблон для таких LXC расширяется правилами для Docker-мостов. После перезагрузки nftables нужно перезапускать Docker (`systemctl restart docker`) — `flush ruleset` удаляет цепочки, созданные Docker.
 
 ---
 
-## 3. Набор systemd-sandbox
+## 3. systemd-sandbox
 
-Сервисы, работающие нативным бинарником под systemd, запускаются от выделенного системного юзера с единым набором sandbox-директив. Набор ограничивает права процесса на уровне ядра: запрет эскалации, read-only файловая система вне явно разрешённых путей, изоляция `/tmp`, `/home`, устройств и kernel-интерфейсов.
-
-Набор разделён на два уровня. **Базовый** получает каждый нативный сервис — он усилен, но заведомо не ломает типовые демоны. **Усиленный** добавляется поверх базового для сервисов, хранящих секреты, учётки или код (IdP, Vaultwarden, Forgejo). Директивы-ломатели в набор не входят и применяются только точечно с проверкой (см. ниже).
-
-### Базовый набор
+Нативный сервис запускается от выделенного системного юзера с единым набором sandbox-директив. Набор подобран под unprivileged LXC: всё, что требует BPF или вложенного user namespace, в нём не используется.
 
 ```ini
 [Service]
@@ -130,8 +124,12 @@ Group=<service>
 Restart=always
 RestartSec=10
 
+UMask=0077
+
 # --- Privileges ---
 NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
 RestrictSUIDSGID=true
 RestrictRealtime=true
 LockPersonality=true
@@ -160,58 +158,38 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 # --- Syscalls ---
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
-```
-
-`ProtectSystem=strict` делает всю файловую систему read-only, кроме путей в `ReadWritePaths` — обычно это единственный `/var/lib/<service>`, куда сервис пишет БД и состояние. Запись в `/var/log` при этом запрещена, поэтому логи идут в journald (`journalctl -u <service>`), файлового логирования нет.
-
-`SystemCallFilter=@system-service` разрешает только курируемый systemd набор syscall'ов, типовой для демонов; на обычных сервисах ломает редко.
-
-### Усиленный набор
-
-Добавляется поверх базового для сервисов с повышенными требованиями (хранят секреты, учётки, код).
-
-```ini
-CapabilityBoundingSet=
 SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
 ```
 
-Строки `SystemCallFilter` аддитивны: базовая задаёт allow-list `@system-service`, усиленная добавляет deny-вычитание `~@privileged @resources` — усиленный сервис получает обе. `CapabilityBoundingSet=` (пустой) убирает все Linux capabilities.
+Файловая система процесса read-only, кроме `ReadWritePaths` — обычно это единственный `/var/lib/<service>`. Логи идут в journald (`journalctl -u <service>`), файлового логирования нет.
 
-Применение усиленного набора отмечается в файле конкретного сервиса.
+`SystemCallErrorNumber=EPERM` возвращает ошибку на запрещённый syscall вместо завершения процесса через SIGSYS.
 
-### PrivateUsers и unprivileged LXC
+### Применение
 
-`PrivateUsers=true` в усиленный набор не входит: он требует вложенного user namespace, а внутри unprivileged LXC его создание запрещено ядром — сервис падает на старте с `status=217/USER` («Failed to set up user namespacing: Permission denied»). `nesting=1` это не снимает: он даёт userns самому systemd контейнера, но не разрешает демону создать ещё один вложенный маппинг. Поскольку все сервисные LXC — unprivileged (раздел 1), директива в этой среде неприменима в принципе. Использовать её имеет смысл только на privileged LXC или bare-metal — тогда она добавляется точечно в drop-in конкретного сервиса.
+Набор оформляется drop-in'ом `/etc/systemd/system/<service>.service.d/hardening.conf`, а не правкой основного unit-файла — так изменения переживают обновление пакета. Если основной юнит уже задаёт `User`, `Group`, `ExecStart` или `Restart`, в drop-in они не дублируются.
 
-### Пояснения к отдельным директивам
+Сервис, которому набор мешает, расширяет или ослабляет его в том же drop-in. Отклонения описываются в файле сервиса.
 
-`RestrictAddressFamilies` включает `AF_NETLINK` намеренно: Go-бинарники (Forgejo и др.) через netlink перечисляют сетевые интерфейсы, без него возможны отказы. Экзотические семейства (`AF_PACKET`, `AF_BLUETOOTH` и т.п.) при этом остаются закрыты.
+После изменений:
 
-`ProtectProc=invisible` безопасен в модели «один сервис на LXC». Исключение — Monitoring/node-exporter LXC, которому нужно видеть чужие процессы: он переопределяет директиву в своём файле.
-
-`CapabilityBoundingSet=` (пустой) корректен только когда сервис не биндит порт ниже 1024. Сервису на привилегированном порту нужно переопределение в его файле: `CapabilityBoundingSet=CAP_NET_BIND_SERVICE` плюс `AmbientCapabilities=CAP_NET_BIND_SERVICE`.
-
-### Сознательно не входят
-
-Частые ломатели — не в наборе, добавляются только точечно и с проверкой на конкретном сервисе.
-
-`MemoryDenyWriteExecute` ломает cgo/JIT, включая вкомпилированный через cgo SQLite (как у Forgejo). `ProcSubset=pid` ломает сервисы, читающие `/proc/sys`, `/proc/meminfo` и подобное.
-
-### Переопределения через drop-in
-
-Отклонения конкретного сервиса от набора оформляются drop-in'ом `/etc/systemd/system/<service>.service.d/hardening.conf`, а не правкой скачанного или дистрибутивного unit-файла — так изменения переживают обновление юнита. В drop-in попадает и выбор усиленного набора, и любые релаксации.
-
-Если основной unit-файл уже задаёт `User`/`Group`/`ExecStart`/`Restart` (как стоковый юнит Forgejo, работающий от юзера `git`), в drop-in эти ключи не дублируются — он несёт только sandbox-директивы, а systemd сливает его с основным юнитом. Проверить слитый результат: `systemctl cat <service>.service`.
+```bash
+systemctl daemon-reload
+systemctl restart <service>
+systemctl cat <service>
+systemd-analyze security <service>
+```
 
 ### Зависимости и автозапуск
 
-Сервисы с зависимостью от локальных компонентов (например, Redis) объявляют её через `Requires=` + `After=`, чтобы зависимость стартовала первой. Все сервисы включены в автозапуск (`systemctl enable`).
+Зависимость от локальных компонентов объявляется через `Requires=` + `After=`. Все сервисы включены в автозапуск (`systemctl enable`).
 
 ---
 
 ## 4. Hardening SSH
 
-На всех хостах (LXC и физических серверах) sshd ужесточается одинаковым drop-in `/etc/ssh/sshd_config.d/10-hardening.conf`. Основной `/etc/ssh/sshd_config` не трогается — изменения переживают апгрейды openssh-server.
+На всех хостах sshd ужесточается drop-in'ом `/etc/ssh/sshd_config.d/10-hardening.conf`. Основной `/etc/ssh/sshd_config` не изменяется.
 
 ```
 PermitRootLogin prohibit-password
@@ -224,56 +202,56 @@ ClientAliveInterval 300
 ClientAliveCountMax 2
 ```
 
-- `PermitRootLogin prohibit-password` — root только по ключу, не по паролю.
-- `PasswordAuthentication no` — парольная аутентификация отключена полностью.
-- `KbdInteractiveAuthentication no` — закрыт обходной путь через keyboard-interactive.
-- `X11Forwarding no` — на headless-узлах не нужен.
-- `AllowAgentForwarding no` — закрыт типичный путь lateral movement через ssh-agent.
-- `AllowTcpForwarding no` — узел нельзя использовать как туннельный прокси через `ssh -L`.
-- `ClientAliveInterval 300` - если клиент не отвечает на сообщение keepalive в течение заданного интервала, сервер считает, что клиент больше недоступен.
-- `ClientAliveCountMax 2` - определяет количество keepalive-сообщений, которые могут быть отправлены клиенту без получения ответа, прежде чем сервер завершит соединение.
+Аутентификация — только по ed25519-ключам. Сетевой доступ к SSH ограничен nftables (раздел 2).
 
-Аутентификация — по ed25519-ключам. Доступ к SSH ограничен на уровне nftables (MGMT + VPN, см. раздел 2). Защита от brute-force — коллекция CrowdSec `crowdsecurity/sshd` на Traefik LXC.
+Проверка перед перезапуском: `sshd -t`. Во время изменений держать открытой вторую SSH-сессию.
 
 ---
 
-## 5. Паттерн бэкапа данных сервиса
+## 5. Бэкап данных сервиса
 
-Бэкап всех LXC — снапшот целиком через **vzdump** в PBS (`06-backup.md`). Данные сервиса, которые нужно резервировать, кладутся на **Proxmox-managed volume** отдельным mount point — такой том попадает в vzdump вместе с rootfs. Крупные датасеты, которые в PBS-снапшот не гонятся (медиатеки, фото, записи камер), выносятся на bind-mount с флагом `backup=0`.
+Все LXC бэкапятся целиком через vzdump в PBS (`06-backup.md`).
 
 ### Managed-volume под данные
 
-Данные сервиса (БД, конфиг, состояние) размещаются на managed-volume ZFS-пула, а не на rootfs. Том добавляется как mount point (`storage:SIZE,mp=/var/lib/<service>/data`) и по умолчанию входит в vzdump. Это даёт две вещи: данные лежат на пуле с CoW-снапшотами, и восстановление LXC из PBS возвращает сервис вместе с его состоянием.
+Данные сервиса (БД, конфиг, состояние) размещаются на отдельном Proxmox-managed volume, а не на rootfs. Mount point добавляется с **явным `backup=1`** — без него том в vzdump не попадает.
+
+```bash
+pct set <vmid> -mp0 <storage>:<size>,mp=/var/lib/<service>,backup=1
+```
+
+Внутри контейнера владелец точки монтирования меняется на юзера сервиса: `chown <service>:<service> /var/lib/<service>`.
+
+Bind-mount'ы с крупными данными добавляются без `backup=1` и в vzdump не входят.
 
 ### Консистентность SQLite
 
-Vzdump снимает файловую систему в один момент, но живой SQLite может быть в середине транзакции с неслитым WAL. Для сервисов на SQLite рядом с боевой базой поддерживается application-consistent копия: systemd-таймер `<service>-db-backup.timer` ежечасно запускает `<service>-db-backup.service`, который делает `sqlite3 db.sqlite3 ".backup db.sqlite3.bak"` — атомарный снапшот, безопасный на работающем сервисе. Vzdump захватывает свежий `.bak` в консистентном виде; при восстановлении из него берётся рабочая база.
+Для сервисов на SQLite рядом с рабочей базой поддерживается консистентная копия. Таймер `<service>-db-backup.timer` ежечасно запускает oneshot `<service>-db-backup.service`, который выполняет `sqlite3 db.sqlite3 ".backup db.sqlite3.bak"`. Vzdump захватывает готовый `.bak` в консистентном состоянии.
 
-Скрипт `/usr/local/sbin/<service>-db-backup.sh` работает под юзером сервиса, oneshot-юнит несёт тот же sandbox-набор, что и сам сервис (`ProtectSystem=strict`, `ReadWritePaths=` на директорию данных, см. раздел 3). WAL/`-shm` в `.bak` не переносятся — SQLite сливает их в момент `.backup`.
+Oneshot-юнит работает от юзера сервиса и несёт тот же sandbox-набор (раздел 3).
 
 ### Восстановление
 
-LXC целиком поднимается из PBS-снапшота (`06-backup.md`). Для сервиса на SQLite после восстановления актуальная консистентная база — это `db.sqlite3.bak`: перед стартом сервиса её переименовывают в `db.sqlite3`, живой `db.sqlite3` из снапшота и его WAL-файлы отбрасывают.
+LXC поднимается из PBS-снапшота. Для SQLite-сервиса перед стартом рабочая база и её WAL/`-shm` удаляются, а `db.sqlite3.bak` переименовывается в `db.sqlite3`.
 
 ---
 
 ## 6. Соглашения об именах
 
-- **kebab-case** — для hostname, имён файлов, systemd-юнитов, storage ID, идентификаторов сервисов (`rest-server`, `vaultwarden-backup.timer`).
-- **snake_case** — для переменных в bash-скриптах.
-- **UPPER_SNAKE_CASE** — для ENV-констант и `define`-блоков nftables (`TRAEFIK_IP`, `MGMT_NET`).
-- Без type-префиксов в именах.
+- **kebab-case** — hostname, имена файлов, systemd-юнитов, storage ID, идентификаторы сервисов.
+- **snake_case** — переменные в bash-скриптах.
+- **UPPER_SNAKE_CASE** — ENV-константы и `define` в nftables.
+- Без type-префиксов: `vaultwarden`, а не `lxc-vaultwarden`.
+- Одно имя сервиса для всех связанных сущностей: hostname, юзер, юнит, директория данных, DNS-имя.
 
-**PBS:** storage `pbs`, datastore `main`, namespace `pve-mini`/`pve`.
-
-**Язык:** документация и обсуждение — на русском; комментарии в конфигах и заголовки алертов — на английском.
+Документация — на русском. Комментарии в конфигах, коде и заголовки алертов — на английском.
 
 ---
 
 ## 7. Общие зависимости сервисов
 
-Каждый сервисный LXC типово зависит от трёх внешних узлов. В файле сервиса перечисляются только отклонения и специфика.
+Типовой сервисный LXC зависит от трёх внешних узлов. В файле сервиса перечисляются только дополнительные зависимости.
 
-- **Traefik (`192.168.40.11`, DMZ)** — единственный разрешённый источник запросов к порту сервиса (nftables). Без Traefik сервис недоступен снаружи LXC.
+- **Traefik** (`192.168.40.11`, DMZ) — единственный источник запросов к порту сервиса.
 - **Unbound на OPNsense** (шлюз VLAN сервиса) — DNS, включая split-horizon `*.kvasok.xyz → 192.168.40.11`.
-- **Бэкап-сервер / PBS (`192.168.10.15`, MGMT)** — приёмник vzdump-снапшотов LXC.
+- **PBS** (`192.168.10.15`, MGMT) — приёмник vzdump-снапшотов.
