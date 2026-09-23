@@ -1,158 +1,229 @@
 ---
 name: ansible
 description: |
-  Ansible — декларативное управление конфигурацией homelab с одного control node (нативный LXC `ansible`, запуск плейбуков локально). Единый источник правды для двух областей: per-host nftables и SSH-hardening. Роли рендерят те же канонические конструкции, что описаны в `02-conventions.md`, из `group_vars` и `host_vars`, поэтому firewall-правила и sshd-конфиг каждого хоста задаются кодом, а не правятся руками. Инвентарём покрыт весь фронт сервисов — сеть, гипервизоры, reverse-proxy, аутентификация, мониторинг, медиастек, файловые шары, PostgreSQL. Документ описывает структуру репозитория, `ansible.cfg` и модель доступа, инвентарь homelab с группами, роли `nftables` и `ssh-hardening`, плейбуки обслуживания. Используй для вопросов по Ansible, автоматизации, управлению firewall-правилами и SSH через код, инвентарю, группам и плейбукам.
+  Ansible — декларативное управление конфигурацией homelab с управляющего узла mgmt. Репозиторий — источник правды для per-host nftables и SSH-hardening всех гостей, гипервизоров и PBS; роли рендерят канонические конструкции из `02-conventions.md` по данным инвентаря. Документ описывает структуру репозитория, `ansible.cfg` и модель доступа, инвентарь homelab (оси групп, `group_vars`, whitelist'ы по хостам), роли `nftables`, `ssh_hardening` и `ssh_copy_id`, плейбуки baseline и обслуживания, а также отдельный инвентарь нод Remnawave.
 ---
 
 # Ansible
 
-Управление конфигурацией homelab централизовано на одном control node — нативном LXC `ansible` (CTID `199`, `192.168.10.99`, MGMT) на PVE-Main. Плейбуки запускаются на нём же (`ansible_connection=local`), а до остальных хостов Ansible достаёт по SSH из сегмента MGMT. Репозиторий — источник правды: nftables-ruleset и SSH-hardening каждого хоста генерируются из инвентаря шаблонами ролей, а не редактируются на месте. Базовые конструкции (whitelist-шаблон nftables, SSH-hardening baseline) описаны в `02-conventions.md`; этот документ показывает, как они применяются кодом и где хранится специфика каждого хоста.
+Конфигурацией homelab управляет **mgmt** — управляющий LXC (CT `199`, `192.168.10.99`, MGMT) на PVE. Репозиторий лежит в `/opt/ansible`, плейбуки запускаются на mgmt от пользователя `ansible`; сам mgmt обслуживается локально (`ansible_connection: local`), остальные хосты — по SSH. Помимо Ansible, mgmt — рабочее место AI-агента (сессии Claude Code под пользователем `claude`) и других инструментов управления инфраструктурой.
+
+Репозиторий — источник правды: `/etc/nftables.conf` и drop-in'ы sshd каждого хоста генерируются шаблонами ролей из инвентаря и на хостах руками не правятся. Канонические конструкции (шаблон nftables, SSH-baseline) описаны в `02-conventions.md`; здесь — как они выражены в коде и где хранится специфика хостов.
 
 ## 1. Структура репозитория
 
-Репозиторий разделён на инвентарь, плейбуки и роли; общая логика живёт в ролях, а всё, что отличает хосты друг от друга, вынесено в `group_vars` и `host_vars`.
-
 ```
 ansible.cfg
+site.yml                        # полный converge: импортирует playbooks/baseline.yml
+requirements.yml
+bin/
+  ssh-key                       # обёртка над playbooks/ops/ssh-copy-id.yml
 inventories/
-  homelab/
-    hosts.ini
+  homelab/                      # инвентарь по умолчанию
+    hosts.yml
     group_vars/
-      all.yml              # ansible_user, nft_defines (единый словарь адресов)
-      vm.yml               # доступ и SSH-директивы для группы vm
-      tcp_forwarding.yml   # Match-исключение AllowTcpForwarding
-    host_vars/
-      amneziawg.yml  arr.yml         authelia.yml  entrypoint.yml
-      frigate.yml    gotify.yml      homepage.yml  immich.yml
-      jellyfin.yml   monitoring.yml  omada.yml     organizer.yml
-      pbs.yml        postgres.yml    pve.yml       pve-mini.yml
-      qbittorrent.yml  shares.yml    traefik.yml   vaultwarden.yml
+      all/
+        connection.yml          # ansible_user, admin_user
+        network.yml             # admin_workstation_addrs, nft_defines
+      vm.yml                    # доступ к VM через admin_user + become
+      tcp_forwarding.yml        # Match-исключение AllowTcpForwarding
+    host_vars/<host>.yml        # по файлу на хост
+  remnanodes/                   # отдельный проект: ноды Remnawave
+    hosts.yml
+    group_vars/all.yml
 playbooks/
-  update.yml               # apt update/upgrade + отчёт, без перезагрузки
-  homelab/
-    nftables.yml           # применить роль nftables
-    nftables-audit.yml     # показать правила всех хостов без SSH
-    ssh-hardening.yml      # применить роль ssh-hardening
+  baseline.yml                  # роли ssh_hardening + nftables на группу baseline
+  ops/
+    apt-upgrade.yml
+    reboot.yml
+    ssh-copy-id.yml
+    nftables-audit.yml
+  remnanodes/
+    compose-update.yml
 roles/
-  nftables/                # рендер /etc/nftables.conf
-  ssh-hardening/           # рендер drop-in'ов в /etc/ssh/sshd_config.d/
+  nftables/                     # /etc/nftables.conf + аудит
+  ssh_hardening/                # /etc/ssh/sshd_config.d/10-hardening.conf, 20-match.conf
+  ssh_copy_id/                  # authorized_keys
 ```
+
+Общая логика живёт в ролях, всё, что отличает хосты, — в `group_vars` и `host_vars`. Имена ролей — snake_case (так требует Ansible); имена хостов в инвентаре совпадают с именами гостей Proxmox (`05-proxmox.md`).
 
 ## 2. ansible.cfg и модель доступа
 
-`[defaults]` задаёт `roles_path = ./roles` и `playbook_dir = ./playbooks`, чистит вывод (`display_skipped_hosts = false`, `display_ok_hosts = true`) и включает `host_key_checking = true`, чтобы падать явно при неизвестном ключе хоста. `[ssh_connection]` включает `pipelining = true` (меньше SSH-операций на задачу) и передаёт `ssh_args = -o StrictHostKeyChecking=accept-new -o ControlMaster=auto -o ControlPersist=60s`.
+`[defaults]` делает `inventories/homelab` инвентарём по умолчанию (нодам Remnawave нужен явный `-i inventories/remnanodes`), задаёт `roles_path = ./roles` и `interpreter_python = /usr/bin/python3`, скрывает skipped-хосты и выводит результаты в YAML (`[callback_default] result_format = yaml`). `host_key_checking = true` вместе с `StrictHostKeyChecking=accept-new` принимает ключ нового хоста при первом подключении, но падает явно при смене ключа известного.
 
-`ControlMaster=auto` + `ControlPersist=60s` мультиплексируют SSH: одно соединение переиспользуется для серии задач, что ускоряет прогон и снижает риск словить fail2ban на быстрых последовательных подключениях к внешнему узлу.
+`[ssh_connection]` включает `pipelining = true` и мультиплексирование (`ControlMaster=auto`, `ControlPersist=60s`): одно SSH-соединение переиспользуется для серии задач.
 
-Аутентификация — по ed25519-ключам. На большинстве хостов подключение под `root` (`group_vars/all.yml`); группа `vm` управляется под пользователем `romank` с `become` (`group_vars/vm.yml`); VPS-хост `entrypoint` подключается под `super` на порту `12122` с `become` и с `ansible_ssh_pipelining: false` — на нём в sudoers включён `requiretty`, несовместимый с pipelining. Секреты и приватные ключи в репозиторий не коммитятся.
+Аутентификация — только по ed25519-ключам, секреты и приватные ключи в репозиторий не коммитятся. Модель доступа:
+
+| Хосты                | Подключение                                                              | Где задано                     |
+| :------------------- | :----------------------------------------------------------------------- | :----------------------------- |
+| `proxmox`, `lxc`     | `root`                                                                   | `group_vars/all/connection.yml` |
+| `vm`                 | `romank` (`admin_user`) + `become`; sshd пускает только его (`AllowUsers`) | `group_vars/vm.yml`            |
+| `mgmt`               | `ansible_connection: local`                                              | `hosts.yml`                    |
+| `entrypoint` (VPS)   | `super`, порт `12122`, `become`, `ansible_ssh_pipelining: false`          | `host_vars/entrypoint.yml`     |
+
+Pipelining на VPS отключён из-за `requiretty` в sudoers.
 
 ## 3. Инвентарь homelab
 
-### Хосты
-
-| Хост | Адрес | Тип |
-| :--- | :--- | :--- |
-| `entrypoint` | VPS (порт 12122) | vps |
-| `pve-mini` | `192.168.10.11` | proxmox |
-| `pve` | `192.168.10.12` | proxmox |
-| `pbs` | `192.168.10.15` | proxmox |
-| `omada` | `192.168.10.31` | lxc |
-| `ansible` | `192.168.10.99` (local) | lxc — control node |
-| `amneziawg` | `192.168.20.11` | lxc |
-| `homepage` | `192.168.20.20` | lxc |
-| `traefik` | `192.168.40.11` | lxc |
-| `vaultwarden` | `192.168.50.11` | lxc |
-| `authelia` | `192.168.50.12` | lxc |
-| `monitoring` | `192.168.50.21` | lxc |
-| `gotify` | `192.168.50.22` | lxc |
-| `jellyfin` | `192.168.50.31` | lxc |
-| `arr` | `192.168.50.32` | lxc |
-| `qbittorrent` | `192.168.50.33` | lxc |
-| `organizer` | `192.168.50.34` | lxc |
-| `immich` | `192.168.50.35` | lxc |
-| `shares` | `192.168.50.36` | lxc |
-| `frigate` | `192.168.50.37` | lxc |
-| `postgres` | `192.168.50.90` | lxc |
-
-Группа `vm` объявлена в инвентаре, но сейчас пуста — хосты Xray, Dev и Be-Free.Online закомментированы, поэтому функциональные группы, включающие `vm`, фактически резолвятся в `proxmox` + `lxc`.
-
 ### Группы
 
-Базовые группы — по типу узла (`vps`, `proxmox`, `lxc`, `vm`); функциональные группы поверх них определяют, что и на каких хостах делает автоматизация.
+Хосты сгруппированы по двум осям плюс функциональные группы:
 
-| Группа | Состав | Назначение |
-| :--- | :--- | :--- |
-| `homelab` | `vps` + `proxmox` + `lxc` + `vm` | все управляемые хосты одним именем |
-| `ssh_hardening_managed` | `proxmox` + `lxc` + `vm` | цель роли `ssh-hardening`; `vps` исключён |
-| `nftables_managed` | `proxmox` + `lxc` + `vm` | цель роли `nftables`; `vps` исключён (держит свой firewall) |
-| `tcp_forwarding` | `traefik`, `homepage`, `ansible` | точечное разрешение TCP-forwarding через SSH-Match |
-| `on_pve_mini` / `on_pve` | по хосту размещения | справочные группы физического расположения |
+| Группа                             | Состав                                   | Назначение                                                  |
+| :--------------------------------- | :--------------------------------------- | :---------------------------------------------------------- |
+| `vps`, `proxmox`, `lxc`, `vm`      | по типу узла                             | платформа — что это за хост                                 |
+| `pve_guests`, `pve_mini_guests`    | по гипервизору                           | размещение — для `--limit` при работах на хосте             |
+| `baseline`                         | `proxmox` + `lxc` + `vm`                 | цель ролей `ssh_hardening` и `nftables`                     |
+| `tcp_forwarding`                   | `traefik`, `homepage`, `mgmt`, `dev`     | хосты, где админ-ноутбуку разрешены SSH-туннели            |
 
-Группы размещения не совпадают с VLAN: например, `homepage` адресован в INFRA (`192.168.20.20`), но физически живёт на PVE-Main (`on_pve`), а `amneziawg` (INFRA, `192.168.20.11`) размещён на PVE-Mini (`on_pve_mini`).
+`vps` в `baseline` не входит сознательно: `entrypoint` — интернет-хост на нестандартном порту со своим firewall, LAN-ruleset на него раскатываться не должен.
+
+Размещение не совпадает с VLAN: `homepage` адресован в INFRA, но живёт на PVE; `amneziawg` из того же INFRA — на PVE-Mini.
+
+### Хосты
+
+| Хост             | Адрес                  | Платформа | Размещение |
+| :--------------- | :--------------------- | :-------- | :--------- |
+| `entrypoint`     | VPS                    | vps       | —          |
+| `pve-mini`       | `192.168.10.11`        | proxmox   | —          |
+| `pve`            | `192.168.10.12`        | proxmox   | —          |
+| `pbs`            | `192.168.10.15`        | proxmox   | —          |
+| `omada`          | `192.168.10.31`        | lxc       | PVE-Mini   |
+| `mgmt`           | `192.168.10.99` (local) | lxc      | PVE        |
+| `amneziawg`      | `192.168.20.11`        | lxc       | PVE-Mini   |
+| `homepage`       | `192.168.20.20`        | lxc       | PVE        |
+| `traefik`        | `192.168.40.11`        | lxc       | PVE        |
+| `vaultwarden` … `postgres` | `192.168.50.11` – `.90` | lxc | PVE     |
+| `xray`           | `192.168.20.12`        | vm        | PVE-Mini   |
+| `dev`, `be-free-online`, `hermes` | `192.168.50.40`, `.50`, `.70` | vm | PVE |
+
+Сервисные LXC на PVE — все гости SERVICES из `05-proxmox.md`: vaultwarden, authelia, monitoring, gotify, jellyfin, arr, qbittorrent, organizer, immich, shares, frigate, onlyoffice, open-webui, tdarr, forgejo, yandex-disk, postgres.
+
+Вне инвентаря — appliance'ы, которые не управляются ролями: VM `opnsense` и VM `home-assistant` (HAOS). Их адреса при этом есть в `nft_defines` и используются как источники в чужих правилах.
 
 ### group_vars
 
-`all.yml` задаёт общие параметры подключения (`ansible_user: root`, `ansible_python_interpreter`) и — главное — словарь `nft_defines`: единый набор имя→адрес, из которого роль `nftables` генерирует блок `define` в ruleset каждого хоста. Это единственный источник адресов для всех firewall-правил, поэтому смена адреса правится в одном месте. Словарь покрывает VLAN-сети (`MGMT_NET`, `INFRA_NET`, `TRUSTED_NET`, `DMZ_NET`, `SERVICES_NET`, `IOT_NET`, `CCTV_NET`, `GUEST_NET`), служебные адреса (`VPS_WG`, `VPN_NET`) и IP отдельных узлов (`PVE_MINI_IP`, `PVE_IP`, `PBS_IP`, `SWITCH_IP`, `AMNEZIAWG_IP`, `XRAY_IP`, `HOMEPAGE_IP`, `TRAEFIK_IP`, `VAULTWARDEN_IP`, `AUTHELIA_IP`, `MONITORING_IP`, `JELLYFIN_IP`, `ARR_IP`, `QBITTORRENT_IP`, `ONLYOFFICE_IP`). В словаре есть и адреса узлов, которых пока нет в активном инвентаре (`XRAY_IP`, `ONLYOFFICE_IP`) — они нужны как разрешённые источники в чужих правилах (`ONLYOFFICE_IP` открывает FileBrowser на `shares`).
+**`all/connection.yml`** — `ansible_user: root` и `admin_user: romank`; `admin_user` подставляется везде, где нужен человеческий аккаунт (`AllowUsers`, Match-блоки, логин на VM).
 
-`vm.yml` переопределяет доступ для группы `vm`: подключение под `romank` с `become` и `ssh_extra_directives: [AllowUsers romank]`, которая добавляется в SSH-baseline этих хостов.
+**`all/network.yml`** — адресная карта, единственный источник адресов для firewall-правил и SSH Match:
 
-`tcp_forwarding.yml` задаёт `ssh_match_blocks`, разрешающий `AllowTcpForwarding yes` только для пользователей `root,romank` с адреса админ-ноутбука (`192.168.10.50`) и VPN (`10.8.0.2`). Глобальный baseline forwarding запрещает (см. `02-conventions.md`, раздел 4), а эта группа точечно открывает его на хостах, через которые нужно строить SSH-туннели.
+- `admin_workstation_addrs` — адреса админ-ноутбука (`192.168.10.50/32`, `10.8.0.2/32`) для Match-исключений sshd;
+- `nft_defines` — словарь имя → адрес, который роль `nftables` рендерит блоком `define` в начало каждого ruleset'а. Имена: `<СЕГМЕНТ>_NET` для подсети, `<СЕГМЕНТ>_<ИМЯ>_IP` для узла, где имя — имя гостя в верхнем регистре без дефисов (`SERVICES_OPENWEBUI_IP`, `SERVICES_HOMEASSISTANT_IP`). Словарь покрывает весь адресный инвентарь (`03-network.md`), включая узлы вне Ansible. Смена адреса правится только здесь.
 
-### host_vars
+**`vm.yml`** — подключение под `admin_user` с `become` и `ssh_extra_directives: [AllowUsers romank]`: VM недоступны под root.
 
-Файлы host_vars хранят специфику узла. Для большинства это `nft_service_rules` — порты сервиса и разрешённые источники сверх SSH; у маршрутизирующего `amneziawg` дополнительно `nft_forward_rules`; гипервизоры (`pve`, `pve-mini`) и хосты с Docker-in-LXC (`frigate`, `immich`, `organizer`) держат `nft_forward_policy: accept`, потому что через их мосты проходит транзитный трафик — bridged-трафик гостей на гипервизорах (в том числе весь трафик OPNsense на PVE-Mini) и трафик внутреннего контейнерного моста в Docker-in-LXC, — который нельзя ронять host-политикой `forward`; у `entrypoint` — только параметры подключения (порт, пользователь, `become`, отключённый pipelining). Хосты без host_vars получают дефолтный ruleset: SSH из MGMT и VPN, всё остальное — drop.
+**`tcp_forwarding.yml`** — `ssh_match_blocks` с исключением `AllowTcpForwarding yes` для пользователей из `tcp_forwarding_users` (по умолчанию `root` и `romank`) и только с `admin_workstation_addrs`. Глобальный baseline forwarding запрещает (`02-conventions.md`, раздел 4). На mgmt список расширен пользователями `ansible` и `claude`.
 
-Сквозной мотив whitelist'ов — два разрешённых потребителя почти у каждого сервиса: `TRAEFIK_IP` как reverse-proxy для пользовательского входа и `HOMEPAGE_IP`, потому что дашборд Homepage дёргает бэкенды сервисов напрямую для виджетов статуса.
+### host_vars и whitelist'ы
 
-| Хост | Разрешённые входящие (сверх SSH) | `forward` |
-| :--- | :--- | :--- |
-| `pve-mini` | `8006` из MGMT, VPN, Homepage, Traefik, Monitoring (pve-exporter); `9100` от Monitoring | `accept` |
-| `pve` | `8006` из MGMT, VPN, Homepage, Traefik, Monitoring (pve-exporter); `3493` (NUT) от вторичных клиентов (PVE-Mini, PBS, PeaNUT); `9100` от Monitoring | `accept` |
-| `pbs` | `8007` из MGMT, VPN, Homepage, Traefik (публикация UI), Monitoring (pbs-exporter); `9100` от Monitoring | `drop` |
-| `omada` | `8043` от Traefik и Homepage; UDP `{29810,19810,27001}` (discovery) и TCP `{29811–29817}` (adoption/management) только от управляемого коммутатора (`SWITCH_IP`) | `drop` |
-| `amneziawg` | UDP `51820` из интернета (любой источник) | `drop` + `awg0` in/out accept |
-| `homepage` | `3000` только от Traefik | `drop` |
-| `traefik` | `443` (eth0) из MGMT, INFRA, TRUSTED, SERVICES, IOT, VPN; `443` (wg0) от VPS (`VPS_WG`, PROXY protocol); `8079` (eth0) от Homepage (Traefik API); `8081` (eth0) от Monitoring (метрики Traefik); `6060` (eth0) от Monitoring (метрики CrowdSec) | `drop` |
-| `vaultwarden` | `8000` только от Traefik | `drop` |
-| `authelia` | `9091` только от Traefik | `drop` |
-| `monitoring` | `3000` (Grafana), `9090` (Prometheus), `8080` (PeaNUT) от Traefik и Homepage | `drop` |
-| `gotify` | `8060` от Traefik и Homepage | `drop` |
-| `jellyfin` | `8096` от Traefik и Homepage | `drop` |
-| `arr` | `5055` (Seer), `9696` (Prowlarr), `7878` (Radarr), `8989` (Sonarr), `8096` (Jellyfin) от Traefik и Homepage | `drop` |
-| `qbittorrent` | `8080` от Traefik, Homepage и arr-стека (`ARR_IP`) | `drop` |
-| `organizer` | `3000` (Anchor), `5000` (ByteStash), `8080` (Baikal) только от Traefik | `accept` |
-| `immich` | `2283` только от Traefik | `accept` |
-| `shares` | `445` (Samba) из MGMT, VPN, TRUSTED; `3300` (FileBrowser) от Traefik, OnlyOffice и Homepage | `drop` |
-| `frigate` | `5000` только от Traefik | `accept` |
-| `postgres` | `5432` (PostgreSQL) и `6379` (Redis) из всего сегмента SERVICES | `drop` |
+`host_vars/<host>.yml` хранит специфику узла: чаще всего `nft_service_rules` — порты сервиса и разрешённые источники. SSH у всех хостов открыт стандартному набору из дефолтов роли — админ-ноутбуку (MGMT и VPN) и mgmt; единственное расширение — shares, где SSH доступен ещё Hermes (`nft_ssh_saddr`).
+
+Фактический набор (вывод `playbooks/ops/nftables-audit.yml`), разрешено во `input` сверх SSH:
+
+| Хост             | Порт → источники                                                                                           | `forward` |
+| :--------------- | :--------------------------------------------------------------------------------------------------------- | :-------- |
+| `pve-mini`       | 8006 ← MGMT, VPN, Homepage, Traefik, Monitoring; 9100 ← Monitoring                                          | `accept`  |
+| `pve`            | 8006 ← MGMT, VPN, Homepage, Traefik, Monitoring; 3493 ← PVE-Mini, PBS, Monitoring; 9100 ← Monitoring         | `accept`  |
+| `pbs`            | 8007 ← MGMT, VPN, Homepage, Traefik, Monitoring; 9100 ← Monitoring                                          | `drop`    |
+| `omada`          | 8043 ← Traefik, Homepage; UDP 29810/19810/27001 и TCP 29811–29817 ← коммутатор                               | `drop`    |
+| `mgmt`           | —                                                                                                           | `drop`    |
+| `amneziawg`      | UDP 51820 ← any                                                                                             | `drop` + `awg0` in/out |
+| `xray`           | 10808, 10809, 12345 ← any                                                                                   | `accept` + nat |
+| `homepage`       | 3000 ← Traefik                                                                                              | `drop`    |
+| `traefik`        | eth0: 443 ← MGMT, INFRA, TRUSTED, SERVICES, IOT, VPN; 2222 ← MGMT, VPN; 8079 ← Homepage; 8081, 6060 ← Monitoring. wg0: 443 ← VPS | `drop` |
+| `vaultwarden`    | 8000 ← Traefik                                                                                              | `drop`    |
+| `authelia`       | 9091 ← Traefik                                                                                              | `drop`    |
+| `monitoring`     | 3000, 9090, 8080 ← Traefik, Homepage                                                                        | `drop`    |
+| `gotify`         | 8060 ← Traefik, Homepage                                                                                    | `drop`    |
+| `jellyfin`       | 8096 ← Traefik, Homepage, arr                                                                               | `drop`    |
+| `arr`            | 5055, 9696, 7878, 8989 ← Traefik, Homepage                                                                  | `drop`    |
+| `qbittorrent`    | 8080 ← Traefik, Homepage, arr                                                                               | `drop`    |
+| `organizer`      | 3000, 3100, 5000, 8080, 8081, 8082 ← Traefik                                                                | Docker    |
+| `immich`         | 2283 ← Traefik                                                                                              | Docker    |
+| `shares`         | 445 ← MGMT, VPN, TRUSTED; 3300 ← Traefik, onlyoffice, Homepage                                               | `drop`    |
+| `frigate`        | 5000 ← Traefik                                                                                              | Docker    |
+| `onlyoffice`     | 80 ← Traefik, shares                                                                                        | Docker    |
+| `open-webui`     | 3000 ← Traefik                                                                                              | Docker    |
+| `tdarr`          | 8265 ← Traefik                                                                                              | Docker    |
+| `forgejo`        | 3000, 2222 ← Traefik                                                                                        | `drop`    |
+| `yandex-disk`    | —                                                                                                           | Docker    |
+| `postgres`       | 5432, 6379 ← SERVICES                                                                                       | `drop`    |
+| `dev`            | 80 ← any                                                                                                    | `drop`    |
+| `be-free-online` | 3000, 3010, 2112 ← Traefik                                                                                  | `drop`    |
+| `hermes`         | —                                                                                                           | `drop`    |
+
+«Docker» в колонке `forward` — `nft_docker_host: true`: `policy drop` с тем же whitelist'ом по исходному порту до DNAT (`02-conventions.md`, раздел 2).
+
+Особые случаи:
+
+- **Гипервизоры** держат `forward accept`: через их мосты идёт bridged-трафик гостей, в том числе весь трафик OPNsense на PVE-Mini (`05-proxmox.md`).
+- **amneziawg** — `forward drop` с правилами `iifname "awg0" accept` / `oifname "awg0" accept`: маршрутизирует VPN-пиров без маскарадинга (`09-amneziawg.md`).
+- **xray** — `forward accept` и дополнительная таблица `ip xray_nat` в `nft_extra_tables`: TCP транзитного трафика к не-приватным адресам перенаправляется на прозрачный порт 12345 (`10-xray.md`). Порты прокси открыты для всех: кто может до них дойти, решает OPNsense (`04-firewall.md`).
+- **traefik** — правила привязаны к интерфейсам (`iif`): `eth0` для внутренних VLAN, `wg0` для туннеля с VPS; 2222 — git-SSH-entrypoint для Forgejo.
+- **postgres** принимает подключения от всего сегмента SERVICES: у сервисов разные клиенты БД, авторизация — на уровне PostgreSQL.
+- **dev** — тестовая машина, порт 80 открыт без ограничения источника внутри сегмента.
 
 ## 4. Роль nftables
 
-Роль рендерит `/etc/nftables.conf` из шаблона `nftables.conf.j2` с заголовком «Managed by Ansible — do not edit by hand» и ссылкой на источник (`host_vars` + `group_vars/all.yml`). Ruleset собирается из блока `define` (весь `nft_defines`) и таблицы `inet filter`: цепочка `input` с `policy drop` содержит loopback, conntrack established/related (и drop invalid), базовые ICMPv4/ICMPv6, SSH из `nft_ssh_saddr`, затем сгенерированные из `nft_service_rules` строки; цепочка `forward` с политикой `nft_forward_policy` и правилами `nft_forward_rules`; цепочка `output` — `accept`. Опциональная строка `nft_extra_tables` дописывается дословно после таблицы filter — для хостов, которым нужны дополнительные таблицы (например, nat REDIRECT у Xray).
+Роль рендерит `/etc/nftables.conf` из шаблона `nftables.conf.j2`. Структура результата — шаблон из `02-conventions.md` (раздел 2): заголовок `Managed by Ansible` с источником, блок `define` из `nft_defines`, таблица `inet filter` с цепочками `input` (`policy drop`), `forward` и `output` (`policy accept`), затем `nft_extra_tables`.
 
-Дефолты роли: `nft_ssh_saddr = { $MGMT_NET, $VPN_NET }`, пустые `nft_service_rules`, `nft_forward_policy: drop`, пустые `nft_forward_rules`. Каждое правило в `nft_service_rules` — словарь: `comment` (обязателен, идёт комментарием над правилом), `port` (одиночный или набор `{ ... }`), `proto` (`tcp` по умолчанию либо `udp`), `iif` (опционально — привязка к интерфейсу вроде `eth0`/`wg0`/`awg0`), `saddr` (опционально — источник; без него разрешено с любого адреса).
+| Переменная           | По умолчанию                                                     | Назначение                                                            |
+| :------------------- | :--------------------------------------------------------------- | :-------------------------------------------------------------------- |
+| `nft_defines`        | инвентарь                                                        | `{ИМЯ: значение}`, рендерится в `define`                              |
+| `nft_ssh_port`       | `ansible_port \| default(22)`                                    | порт SSH — следует инвентарю, чтобы не отрезать хост на нестандартном порту |
+| `nft_ssh_saddr`      | `{ $MGMT_NOTEBOOK_IP, $VPN_MGMT_NOTEBOOK_IP, $MGMT_MGMT_IP }`     | источники SSH                                                         |
+| `nft_service_rules`  | `[]`                                                             | правила хоста: `comment`, `port`, опционально `proto`, `iif`, `saddr` |
+| `nft_forward_policy` | `drop`                                                           | политика `forward`                                                    |
+| `nft_forward_rules`  | `[]`                                                             | сырые строки внутри `forward`                                         |
+| `nft_extra_tables`   | `""`                                                             | сырой nft-текст после таблицы filter (например, NAT-таблица Xray)     |
+| `nft_docker_host`    | `false`                                                          | Docker-in-LXC: `forward drop` с зеркалом `nft_service_rules` по исходному порту до DNAT, `nft_forward_policy` игнорируется, Docker перезапускается после reload |
 
-Задача деплоит шаблон с `validate: nft -c -f %s` — конфиг проверяется до записи, битый ruleset не применяется, — с `backup: true` и `mode 0644`, и по изменению дёргает handler, перечитывающий `nftables` через systemd (`state: reloaded`); отдельным шагом сервис держится `enabled` и `started`. Это кодовое воплощение whitelist-шаблона из `02-conventions.md` (раздел 2) и двухслойной модели фильтрации из `04-firewall.md`.
+Правило в `nft_service_rules`: `port` — одиночный или набор `{ ... }`, `proto` — `tcp` по умолчанию, `saddr` без значения — любой источник, `iif` привязывает правило к интерфейсу. Каждое правило рендерится строкой `accept` с комментарием над ней; на Docker-хостах — ещё и строкой в `forward`.
 
-## 5. Роль ssh-hardening
+Задача деплоит шаблон с `validate: nft -c -f %s` — синтаксически битый ruleset не записывается — и `backup: true`. Изменение уведомляет два handler'а: `Reload nftables` (reload службы) и `Restart docker` (только при `nft_docker_host`: `flush ruleset` удаляет NAT-цепочки Docker, а Docker пересоздаёт их лишь при старте демона). Отдельная задача держит `nftables` в `enabled` и `started`.
 
-Роль управляет двумя drop-in'ами в `/etc/ssh/sshd_config.d/`, не трогая основной `sshd_config`, чтобы изменения переживали апгрейд openssh-server. `10-hardening.conf` — канонический baseline из дефолтов роли: `PermitRootLogin prohibit-password`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `X11Forwarding no`, `AllowAgentForwarding no`, `AllowTcpForwarding no`, `ClientAliveInterval 300`, `ClientAliveCountMax 2`, плюс любые `ssh_extra_directives`. `20-match.conf` — per-host блоки `Match` из `ssh_match_blocks`: каждый ослабляет одну директиву для конкретного пользователя/адреса и закрывается `Match all`, чтобы настройки не протекали дальше.
+`tasks/audit.yml` — режим аудита: без подключения к хостам вычисляет из inventory, что каждый хост разрешает во `input`, и печатает карточку на хост.
 
-Задачи всегда деплоят `10-hardening.conf`; `20-match.conf` создаётся только при непустом `ssh_match_blocks`, иначе файл удаляется — состояние остаётся чистым. Отдельная задача выполняет `sshd -t` на полной эффективной конфигурации (`changed_when: false`), а handler по изменению любого drop-in'а делает reload сервиса `ssh`. Цель роли — группа `ssh_hardening_managed` (proxmox, lxc, vm); VPS-хост `entrypoint` под неё не подпадает и держит собственный доступ. `ssh_extra_directives` использует группа `vm` (`AllowUsers romank`), `ssh_match_blocks` — группа `tcp_forwarding`. Baseline и его обоснование — `02-conventions.md`, раздел 4.
+## 5. Роль ssh_hardening
 
-## 6. Плейбуки
+Роль управляет двумя drop-in'ами в `/etc/ssh/sshd_config.d/`, не трогая основной `sshd_config`, чтобы изменения переживали обновление openssh-server.
 
-`update.yml` (hosts `all`, `serial: 1`) обновляет apt-хосты по одному: `update_cache`, `dist-upgrade`, `autoclean`/`autoremove --purge`/`clean`, проверка `/var/run/reboot-required` и отчёт по каждому хосту с флагом необходимости перезагрузки. Сам плейбук не перезагружает — только отчитывается.
+- **`10-hardening.conf`** — baseline из дефолтов роли: `PermitRootLogin prohibit-password`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `X11Forwarding no`, `AllowAgentForwarding no`, `AllowTcpForwarding no`, `ClientAliveInterval 300`, `ClientAliveCountMax 2`, плюс `ssh_extra_directives`.
+- **`20-match.conf`** — блоки `Match` из `ssh_match_blocks` (`comment`, `match`, `directives`); каждый ослабляет директиву для конкретных пользователей и адресов. Файл создаётся только при непустом списке, иначе удаляется.
 
-`homelab/nftables.yml` применяет роль `nftables` к группе `nftables_managed`. Предпросмотр дрейфа без изменений — `ansible-playbook -i inventories/homelab playbooks/homelab/nftables.yml --check --diff --limit <host>`; раскатка ведётся по одному хосту.
+Оба файла деплоятся с `backup: true`; после деплоя `sshd -t` проверяет полную эффективную конфигурацию, handler делает reload sshd. `ssh_extra_directives` использует группа `vm` (`AllowUsers`), `ssh_match_blocks` — группа `tcp_forwarding`. Обоснование baseline — `02-conventions.md`, раздел 4.
 
-`homelab/nftables-audit.yml` работает `connection: local` и без SSH в гости: читает `host_vars` на control node и печатает по одной карточке на хост — что каждый узел разрешает во `input`. Это инструмент обзора всех firewall-правил инфраструктуры разом.
+## 6. Роль ssh_copy_id
 
-`homelab/ssh-hardening.yml` применяет роль `ssh-hardening` к `ssh_hardening_managed`. Раскатывать по одному хосту, держа наготове второй SSH-сеанс и доступ через `pct enter` / `qm terminal` на случай ошибки в конфиге.
+Добавляет и удаляет публичные ключи в `authorized_keys`. Ключи берутся из `roles/ssh_copy_id/files/` по списку `ssh_copy_id_keys` (у каждого — `file` и опциональный `state: absent`). Повседневная обёртка — `bin/ssh-key` (например, `bin/ssh-key add romank xray`).
 
-## 7. Зависимости
+## 7. Плейбуки
 
-- **Control node в MGMT** — nftables всех хостов разрешают SSH (`22`) из `MGMT_NET` и `VPN_NET`, поэтому Ansible достаёт любой узел; при сужении правил это учитывается.
-- **`group_vars/all.yml → nft_defines`** — единственный источник адресов для рендера ruleset; правки адресации идут сюда.
-- **`02-conventions.md`** — канонические baseline'ы (nftables-шаблон, SSH-hardening), которые роли воплощают в коде.
-- **`04-firewall.md`** — двухслойная модель фильтрации, внутрисегментный слой которой (per-host nftables) и разворачивается ролью `nftables`.
+| Плейбук                             | Цель                                    | Что делает                                                                  |
+| :---------------------------------- | :-------------------------------------- | :-------------------------------------------------------------------------- |
+| `site.yml`                          | `baseline`                              | полный converge; импортирует `playbooks/baseline.yml`                       |
+| `playbooks/baseline.yml`            | `baseline`                              | роли `ssh_hardening` и `nftables`; теги `baseline`, `ssh_hardening`, `nftables` |
+| `playbooks/ops/apt-upgrade.yml`     | `-e target=`, по умолчанию `baseline`   | `apt dist-upgrade` по одному хосту (`serial: 1`), отчёт о необходимости перезагрузки; сам не перезагружает |
+| `playbooks/ops/reboot.yml`          | только явный `-e target=`               | поочерёдная перезагрузка с ожиданием возврата хоста                         |
+| `playbooks/ops/ssh-copy-id.yml`     | только явный `-e target=`               | роль `ssh_copy_id`                                                          |
+| `playbooks/ops/nftables-audit.yml`  | `baseline`, `connection: local`         | карточки `input`-правил всех хостов без SSH в гости                         |
+| `playbooks/remnanodes/compose-update.yml` | `remnanodes`                      | pull образов и пересоздание стека remnanode по одной ноде                   |
+
+Плейбуки с опасным действием (`reboot`, `ssh-copy-id`) без `-e target=<group>` не матчат ни одного хоста — случайный прогон на весь инвентарь исключён. Ops-плейбуки работают и с инвентарём remnanodes (`-i inventories/remnanodes -e target=remnanodes`).
+
+### Порядок раскатки
+
+Изменения ролей и host_vars сначала проверяются без применения — `ansible-playbook site.yml --check --diff --limit <host> --tags nftables` — и раскатываются по одному хосту. При изменениях SSH или firewall держится открытая вторая SSH-сессия, а на крайний случай — консоль через `pct enter` / `qm terminal` на гипервизоре.
+
+## 8. Инвентарь remnanodes
+
+Отдельный инвентарь для нод VPN-сервиса Remnawave (`be-free-online`), независимый от homelab и никогда не пересекающийся с ним: запуск только с явным `-i inventories/remnanodes`. Группа `remnanodes` — по одной ноде на локацию (`de`, `ee`, `fi`, `fr`, `nl`, `nld`, `pl`, `uk`). Роли baseline на ноды не применяются; с ними работают `compose-update.yml` и ops-плейбуки.
+
+## 9. Зависимости
+
+- **mgmt в MGMT** — стандартный `nft_ssh_saddr` всех хостов разрешает SSH с `192.168.10.99`, поэтому Ansible достаёт любой узел; OPNsense даёт mgmt доступ во все приватные сети (`04-firewall.md`).
+- **`group_vars/all/network.yml`** — единственный источник адресов для рендера правил.
+- **`02-conventions.md`** — канонические шаблоны nftables и SSH, которые воплощают роли.
+- **`04-firewall.md`** — двухслойная модель фильтрации; роль `nftables` разворачивает её внутрисегментный слой.
